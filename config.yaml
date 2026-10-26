@@ -13,6 +13,9 @@ telegram:
 # Temps entre deux passages (minutes). Trop bas = risque de blocage Leboncoin.
 intervalle_minutes: 10
 
+# Heure d'envoi du rapport quotidien des prix du marché (0-23). Mets null pour le couper.
+rapport_marche_heure: 8
+
 # Départements où chercher, ex : ["13", "83", "84"]. Vide = toute la France.
 departements: ["13", "84", "83", "30", "04"]
 

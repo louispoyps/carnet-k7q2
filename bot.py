@@ -555,6 +555,7 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
     client = make_client()
     notify = SEEN_FILE.exists()
     seen = load_seen()
+    last_report = None
     if not notify:
         log.info("Premier lancement : les annonces déjà en ligne sont mémorisées sans être envoyées")
     while True:
@@ -565,6 +566,14 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
         except Exception as e:
             log.exception("Erreur inattendue : %s", e)
             client = make_client()
+        # Rapport du marché, une fois par jour à l'heure choisie
+        now = datetime.now(PARIS)
+        if ok and now.hour == cfg.get("rapport_marche_heure", -1) and last_report != now.date():
+            try:
+                market_report(client, tg, cfg)
+                last_report = now.date()
+            except Exception as e:
+                log.warning("Rapport du marché impossible : %s", e)
         if status is not None:
             status.update(last_pass=datetime.now(PARIS).strftime("%d/%m %H:%M"),
                           searches_ok=ok, searches_total=len(cfg["modeles"]))
@@ -579,7 +588,8 @@ def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
     """Prix du marché actuel de chaque modèle comparé à ta grille."""
     rent = cfg["rentabilite"]
     market = MarketPrice(client)
-    lines = ["<b>📊 État du marché (toute la France)</b>", ""]
+    day = datetime.now(PARIS).strftime("%d/%m")
+    lines = [f"<b>☀️ Prix du marché du {day}</b> (toute la France)", ""]
     for model in cfg["modeles"]:
         prices = sorted(market.for_model(model))
         if len(prices) < 5:
