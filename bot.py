@@ -28,6 +28,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import lbc
 import yaml
@@ -38,6 +39,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "config.yaml"
 SECRET_FILE = BASE_DIR / "secret.yaml"  # token Telegram local, jamais envoyé sur GitHub
 SEEN_FILE = BASE_DIR / "annonces_vues.json"
+
+PARIS = ZoneInfo("Europe/Paris")
 
 FUELS = {"essence": "1", "diesel": "2", "hybride": "6", "electrique": "4", "électrique": "4"}
 
@@ -132,6 +135,28 @@ def matches_power(ad: lbc.Ad, model: dict) -> bool:
     target = model.get("puissance_ch")
     hp = to_int(attr(ad, "horse_power_din"))
     return not target or hp is None or abs(hp - target) <= 5
+
+
+def fingerprint(ad: lbc.Ad) -> str | None:
+    """Empreinte de la voiture, pour reconnaître une annonce republiée sous un autre numéro."""
+    km = attr(ad, "mileage")
+    if not km:
+        return None
+    return "fp:" + "|".join(str(x) for x in (
+        attr(ad, "u_car_model"), attr(ad, "regdate"), km, ad.location.zipcode))
+
+
+def already_seen(ad: lbc.Ad, seen: dict) -> bool:
+    fp = fingerprint(ad)
+    return str(ad.id) in seen or (fp is not None and fp in seen)
+
+
+def mark_seen(ad: lbc.Ad, seen: dict) -> None:
+    now = datetime.now().isoformat()
+    seen[str(ad.id)] = now
+    fp = fingerprint(ad)
+    if fp:
+        seen[fp] = now
 
 
 # ------------------------------------------------------------- prix marché
@@ -393,6 +418,7 @@ def analyse(ad: lbc.Ad, model: dict, market: MarketPrice, cfg: dict) -> dict | N
 
 class Telegram:
     def __init__(self, token: str, chat_id: str, dry_run: bool = False):
+        self.token = token
         self.api = f"https://api.telegram.org/bot{token}"
         self.chat_id = chat_id
         self.dry_run = dry_run
@@ -459,8 +485,13 @@ def format_message(ad: lbc.Ad, a: dict, model: dict, cfg: dict) -> str:
 
 # ------------------------------------------------------------------- boucle
 
-def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict) -> int:
-    """Fait un passage sur tous les modèles ; renvoie le nombre de recherches réussies."""
+def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict, notify: bool = True) -> int:
+    """Fait un passage sur tous les modèles ; renvoie le nombre de recherches réussies.
+
+    notify=False : marque les annonces du jour comme vues sans rien envoyer
+    (premier lancement, ou redémarrage sur un hébergeur qui a perdu la mémoire).
+    """
+    today = datetime.now(PARIS).date().isoformat()
     locs = locations(cfg)
     market = MarketPrice(client)
     rent = cfg["rentabilite"]
@@ -479,23 +510,57 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict) -> int:
             log.error("Échec de la recherche (%s)", e)
             continue
         ok += 1
-        new_ads = [ad for ad in result.ads if str(ad.id) not in seen]
-        log.info("  %d annonces, %d nouvelles", len(result.ads), len(new_ads))
+        # Seulement les annonces publiées aujourd'hui, jamais traitées
+        todays = [ad for ad in result.ads if (ad.first_publication_date or "")[:10] >= today]
+        new_ads = [ad for ad in todays if not already_seen(ad, seen)]
+        log.info("  %d annonces aujourd'hui, %d nouvelles", len(todays), len(new_ads))
+        if not notify:
+            for ad in new_ads:
+                mark_seen(ad, seen)
+            continue
         for ad in new_ads:
+            if already_seen(ad, seen):  # republiée dans la même recherche
+                continue
             try:
                 a = analyse(ad, model, market, cfg)
             except Exception as e:
                 # Pas marquée comme vue : elle sera réessayée au prochain passage
                 log.warning("  erreur d'analyse sur %s : %s", ad.url, e)
                 continue
-            seen[str(ad.id)] = datetime.now().isoformat()
+            mark_seen(ad, seen)
             if a:
                 log.info("  %s %+.0f € : %s", a["label"], a["profit"], ad.subject)
                 tg.send(format_message(ad, a, model, cfg),
                         ad.images[0] if ad.images else None)
             save_seen(seen)
         time.sleep(3)
+    save_seen(seen)
     return ok
+
+
+def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = None) -> int:
+    """Boucle principale ; renvoie le nombre de recherches réussies au dernier passage."""
+    client = lbc.Client()
+    notify = SEEN_FILE.exists()
+    seen = load_seen()
+    if not notify:
+        log.info("Premier lancement : les annonces déjà en ligne sont mémorisées sans être envoyées")
+    while True:
+        ok = 0
+        try:
+            ok = run_once(client, tg, cfg, seen, notify)
+            notify = True
+        except Exception as e:
+            log.exception("Erreur inattendue : %s", e)
+            client = lbc.Client()
+        if status is not None:
+            status.update(last_pass=datetime.now(PARIS).strftime("%d/%m %H:%M"),
+                          searches_ok=ok, searches_total=len(cfg["modeles"]))
+        if once:
+            return ok
+        minutes = cfg.get("intervalle_minutes", 10)
+        log.info("Prochain passage dans %d min", minutes)
+        time.sleep(minutes * 60)
 
 
 def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
@@ -523,6 +588,13 @@ def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
     tg.send("\n".join(lines))
 
 
+def telegram_from_config(cfg: dict, dry_run: bool = False) -> Telegram:
+    # Sur un hébergeur, le token et le chat_id viennent des variables d'environnement
+    token = os.environ.get("TELEGRAM_TOKEN") or cfg["telegram"]["token"]
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID") or cfg["telegram"]["chat_id"]
+    return Telegram(token, str(chat_id), dry_run=dry_run)
+
+
 def print_chat_id(token: str) -> None:
     r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=30).json()
     chats = {u["message"]["chat"]["id"]: u["message"]["chat"].get("first_name", "")
@@ -543,37 +615,20 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = load_config()
-    # Sur GitHub Actions, le token et le chat_id viennent des secrets
-    token = os.environ.get("TELEGRAM_TOKEN") or cfg["telegram"]["token"]
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID") or cfg["telegram"]["chat_id"]
     if args.chat_id:
-        print_chat_id(token)
+        print_chat_id(telegram_from_config(cfg).token)
         return
-    tg = Telegram(token, str(chat_id), dry_run=args.dry_run)
+    tg = telegram_from_config(cfg, dry_run=args.dry_run)
     if args.test:
         tg.send("✅ Le bot Leboncoin est bien connecté !")
         return
 
-    client = lbc.Client()
     if args.marche:
-        market_report(client, tg, cfg)
+        market_report(lbc.Client(), tg, cfg)
         return
 
-    seen = load_seen()
-    while True:
-        ok = 0
-        try:
-            ok = run_once(client, tg, cfg, seen)
-        except Exception as e:
-            log.exception("Erreur inattendue : %s", e)
-            client = lbc.Client()
-        if args.once:
-            if ok == 0:
-                sys.exit("Aucune recherche n'a abouti (Leboncoin bloque peut-être cette connexion)")
-            break
-        minutes = cfg.get("intervalle_minutes", 10)
-        log.info("Prochain passage dans %d min", minutes)
-        time.sleep(minutes * 60)
+    if run_loop(tg, cfg, once=args.once) == 0:
+        sys.exit("Aucune recherche n'a abouti (Leboncoin bloque peut-être cette connexion)")
 
 
 if __name__ == "__main__":
