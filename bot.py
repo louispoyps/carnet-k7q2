@@ -482,12 +482,13 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict) -> int:
         new_ads = [ad for ad in result.ads if str(ad.id) not in seen]
         log.info("  %d annonces, %d nouvelles", len(result.ads), len(new_ads))
         for ad in new_ads:
-            seen[str(ad.id)] = datetime.now().isoformat()
             try:
                 a = analyse(ad, model, market, cfg)
             except Exception as e:
+                # Pas marquée comme vue : elle sera réessayée au prochain passage
                 log.warning("  erreur d'analyse sur %s : %s", ad.url, e)
                 continue
+            seen[str(ad.id)] = datetime.now().isoformat()
             if a:
                 log.info("  %s %+.0f € : %s", a["label"], a["profit"], ad.subject)
                 tg.send(format_message(ad, a, model, cfg),
