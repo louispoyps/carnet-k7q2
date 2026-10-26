@@ -1,0 +1,187 @@
+# ============================================================
+#  Bot achat-revente Leboncoin -> Telegram
+# ============================================================
+
+# Sur ton PC, le token et le chat_id sont dans secret.yaml (jamais envoyé sur GitHub).
+# Sur GitHub, ils sont dans les secrets du dépôt.
+telegram:
+  # Token donné par @BotFather (voir LISEZMOI.md)
+  token: "COLLE_TON_TOKEN_ICI"
+  # Ton chat_id (lance : python bot.py --chat-id  pour le trouver)
+  chat_id: ""
+
+# Temps entre deux passages (minutes). Trop bas = risque de blocage Leboncoin.
+intervalle_minutes: 10
+
+# Départements où chercher, ex : ["13", "83", "84"]. Vide = toute la France.
+departements: ["13", "84", "83", "30", "04"]
+
+# ------------------------------------------------------------
+#  Calcul de rentabilité
+#  achat max = revente estimée x (1 - négo) - frais - marge min
+#  (= ta règle "prix moyen - 1 300 €" environ)
+# ------------------------------------------------------------
+rentabilite:
+  negociation_revente_pct: 8    # ce que tu lâches à la revente
+  frais_fixes: 500              # CT, nettoyage, trajet, imprévus
+  marge_min: 500                # bénéfice minimum pour être alerté
+  # Prudent : revente = le plus bas entre le marché en direct et le milieu de ta grille
+  prudent: true
+  # Si true : jamais au-dessus de l'"achat_max" de ta grille, même si le marché est plus haut
+  respecter_grille: true
+  # Le bot cherche aussi les annonces jusqu'à X % au-dessus de l'achat max,
+  # parce qu'elles peuvent se négocier (il te dit à combien proposer)
+  marge_negociation_achat_pct: 12
+  # Prix sous X % du marché = suspect (arnaque ou gros défaut caché)
+  prix_suspect_pct: 50
+
+# Frais ajoutés si la description contient ces mots
+frais_travaux:
+  "réparations mineures": 400   # case "état" de l'annonce
+  "à prévoir": 400
+  "a prevoir": 400
+  "embrayage": 500
+  "voyant": 300
+  "contrôle technique à faire": 150
+  "ct à faire": 150
+  "pneus à changer": 250
+  "clim à recharger": 100
+
+# Points positifs repérés dans la description
+mots_positifs:
+  - "distribution faite"
+  - "courroie faite"
+  - "ct ok"
+  - "contrôle technique ok"
+  - "ct vierge"
+  - "carnet d'entretien"
+  - "factures"
+  - "première main"
+  - "1ère main"
+  - "embrayage neuf"
+
+# Annonce ignorée si la description contient un de ces mots
+mots_interdits:
+  - "hs"
+  - "moteur hs"
+  - "boite hs"
+  - "boîte hs"
+  - "pour pièces"
+  - "pour pieces"
+  - "ne démarre pas"
+  - "ne demarre pas"
+  - "joint de culasse"
+  - "épave"
+  - "accidenté"
+  - "sans carte grise"
+  - "export"
+  - "vendu en l'état pour"
+
+# Historique (rapport Autoviza joint par Leboncoin)
+historique:
+  exiger_rapport: false
+  proprietaires_max: 5
+  rejeter_si_sinistre: true
+  rejeter_si_km_incoherent: true
+  rejeter_si_vehicule_endommage: true
+  rejeter_si_usage_pro: true      # taxi/VTC, auto-école... dur à revendre
+
+# ------------------------------------------------------------
+#  Ta grille de modèles
+#  carburant : essence / diesel / hybride (ou supprime la ligne)
+#  marque / modele : codes Leboncoin (déjà vérifiés)
+#  titre_contient / titre_exclut : écarte les annonces mal classées
+#  (ex : une Twingo rangée en "Clio" par le vendeur)
+# ------------------------------------------------------------
+modeles:
+  - nom: "Clio 3 dCi"
+    titre_contient: ["clio"]
+    titre_exclut: ["clio 2", "clio ii", "clio 4", "clio iv", "clio 5", "campus", "twingo", "scenic", "megane", "kangoo"]
+    marque: RENAULT
+    modele: RENAULT_Clio
+    carburant: diesel
+    annees: [2009, 2012]
+    km: [140000, 200000]
+    prix_moyen: [4000, 5000]
+    achat_max: 2700
+    achat_vise: [2200, 2500]
+
+  - nom: "Peugeot 207"
+    titre_contient: ["207"]
+    titre_exclut: ["206", "208", "307", "2008"]
+    marque: PEUGEOT
+    modele: PEUGEOT_207
+    annees: [2009, 2011]
+    km: [130000, 170000]
+    prix_moyen: [3000, 3800]
+    achat_max: 2000
+    achat_vise: [1600, 1900]
+
+  - nom: "C3 essence 82 ch"
+    titre_contient: ["c3"]
+    titre_exclut: ["picasso", "aircross", "pluriel", "ds3"]
+    marque: CITROEN
+    modele: CITROEN_C3
+    carburant: essence
+    puissance_ch: 82
+    annees: [2015, 2015]
+    km: [130000, 160000]
+    prix_moyen: [3300, 4000]
+    achat_max: 2500
+    achat_vise: [2000, 2300]
+
+  - nom: "208 essence"
+    titre_contient: ["208"]
+    titre_exclut: ["207", "308", "2008"]
+    marque: PEUGEOT
+    modele: PEUGEOT_208
+    carburant: essence
+    annees: [2015, 2017]
+    km: [130000, 165000]
+    prix_moyen: [4800, 5200]
+    achat_max: 3600
+    achat_vise: [3000, 3400]
+
+  - nom: "Clio 4"
+    titre_contient: ["clio"]
+    titre_exclut: ["clio 2", "clio ii", "clio 3", "clio iii", "clio 5", "clio v", "campus", "twingo", "scenic", "megane"]
+    marque: RENAULT
+    modele: RENAULT_Clio
+    annees: [2013, 2015]
+    km: [150000, 200000]
+    prix_moyen: [5500, 6000]
+    achat_max: 4200
+    achat_vise: [3500, 4000]
+
+  - nom: "Sandero"
+    titre_contient: ["sandero"]
+    titre_exclut: ["logan", "duster"]
+    marque: DACIA
+    modele: DACIA_Sandero
+    annees: [2015, 2015]
+    km: [125000, 145000]
+    prix_moyen: [5300, 5900]
+    achat_max: 4000
+    achat_vise: [3300, 3800]
+
+  - nom: "Polo 5"
+    titre_contient: ["polo"]
+    titre_exclut: ["golf", "polo 4", "polo iv", "polo 6", "polo vi"]
+    marque: VOLKSWAGEN
+    modele: VOLKSWAGEN_Polo
+    annees: [2014, 2014]
+    km: [170000, 190000]
+    prix_moyen: [5700, 6200]
+    achat_max: 4400
+    achat_vise: [3700, 4100]
+
+  - nom: "Yaris"
+    titre_contient: ["yaris"]
+    titre_exclut: ["yaris cross", "aygo", "auris"]
+    marque: TOYOTA
+    modele: TOYOTA_Yaris
+    annees: [2013, 2015]
+    km: [140000, 190000]
+    prix_moyen: [6500, 7500]
+    achat_max: 5200
+    achat_vise: [4400, 4900]

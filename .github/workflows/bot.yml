@@ -1,0 +1,46 @@
+name: Bot Leboncoin
+
+on:
+  schedule:
+    # Toutes les 30 min de 7h à 21h30 (heure d'hiver ; 8h-22h30 en été).
+    # Heures en UTC. Calibré pour rester sous les 2 000 min/mois gratuites d'un dépôt privé.
+    # GitHub peut décaler un passage de quelques minutes.
+    - cron: "*/30 6-20 * * *"
+  workflow_dispatch:          # bouton "Run workflow" pour lancer à la main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bot
+  cancel-in-progress: false
+
+jobs:
+  chasse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Recherche des bonnes affaires
+        run: python bot.py --once
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      # Mémorise les annonces déjà envoyées pour ne pas les renvoyer
+      - name: Sauvegarde des annonces vues
+        if: always()
+        run: |
+          git config user.name "bot-leboncoin"
+          git config user.email "bot-leboncoin@users.noreply.github.com"
+          git add annonces_vues.json 2>/dev/null || exit 0
+          git commit -m "maj annonces vues" || exit 0
+          git pull --rebase -X theirs && git push
