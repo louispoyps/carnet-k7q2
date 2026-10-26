@@ -28,6 +28,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import lbc
@@ -117,6 +118,17 @@ def locations(cfg: dict) -> list[lbc.Department] | None:
     wanted = {str(d).lstrip("0") for d in cfg.get("departements") or []}
     found = [d for d in lbc.Department if len(d.value) == 4 and d.value[2].lstrip("0") in wanted]
     return found or None
+
+
+def make_client() -> lbc.Client:
+    """Client Leboncoin, via un proxy si PROXY_URL est défini (ex : http://user:mdp@hote:port)."""
+    url = os.environ.get("PROXY_URL")
+    if not url:
+        return lbc.Client()
+    u = urlsplit(url)
+    # Identifiants laissés encodés (%40...) : curl les décode lui-même
+    return lbc.Client(proxy=lbc.Proxy(host=u.hostname, port=u.port, username=u.username,
+                                      password=u.password, scheme=u.scheme))
 
 
 def model_filters(model: dict) -> dict:
@@ -540,7 +552,7 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict, notify: bo
 
 def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = None) -> int:
     """Boucle principale ; renvoie le nombre de recherches réussies au dernier passage."""
-    client = lbc.Client()
+    client = make_client()
     notify = SEEN_FILE.exists()
     seen = load_seen()
     if not notify:
@@ -552,7 +564,7 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
             notify = True
         except Exception as e:
             log.exception("Erreur inattendue : %s", e)
-            client = lbc.Client()
+            client = make_client()
         if status is not None:
             status.update(last_pass=datetime.now(PARIS).strftime("%d/%m %H:%M"),
                           searches_ok=ok, searches_total=len(cfg["modeles"]))
@@ -624,7 +636,7 @@ def main() -> None:
         return
 
     if args.marche:
-        market_report(lbc.Client(), tg, cfg)
+        market_report(make_client(), tg, cfg)
         return
 
     if run_loop(tg, cfg, once=args.once) == 0:
