@@ -21,6 +21,7 @@ import argparse
 import html
 import json
 import logging
+import math
 import os
 import re
 import statistics
@@ -118,6 +119,17 @@ def locations(cfg: dict) -> list[lbc.Department] | None:
     wanted = {str(d).lstrip("0") for d in cfg.get("departements") or []}
     found = [d for d in lbc.Department if len(d.value) == 4 and d.value[2].lstrip("0") in wanted]
     return found or None
+
+
+def distance_km(cfg: dict, ad: lbc.Ad) -> float | None:
+    """Distance par la route (estimée) entre chez toi et la voiture."""
+    home = cfg.get("domicile")
+    lat, lng = ad.location.lat, ad.location.lng
+    if not home or lat is None or lng is None:
+        return None
+    la1, lo1, la2, lo2 = map(math.radians, (home["lat"], home["lng"], lat, lng))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 2 * 6371 * math.asin(math.sqrt(h)) * 1.25  # x1,25 : la route n'est pas à vol d'oiseau
 
 
 def make_client() -> lbc.Client:
@@ -352,6 +364,14 @@ def analyse(ad: lbc.Ad, model: dict, market: MarketPrice, cfg: dict) -> dict | N
     if damage:
         text += " " + (attr_label(ad, "vehicle_damage") or "").lower()
     costs = rent["frais_fixes"]
+    dist = distance_km(cfg, ad)
+    trip = 0.0
+    if dist is not None:
+        if rent.get("distance_max_km") and dist > rent["distance_max_km"]:
+            log.info("  trop loin (%.0f km) : %s", dist, ad.subject)
+            return None
+        trip = max(0.0, dist - rent.get("trajet_inclus_km", 50)) * rent.get("cout_trajet_km", 0.25)
+        costs += trip
     extra = {w: c for w, c in (cfg.get("frais_travaux") or {}).items() if w in text}
     if extra:
         costs += max(extra.values())
@@ -416,6 +436,8 @@ def analyse(ad: lbc.Ad, model: dict, market: MarketPrice, cfg: dict) -> dict | N
         "resale": resale,
         "net_resale": net_resale,
         "costs": costs,
+        "dist": dist,
+        "trip": trip,
         "profit": profit,
         "roi": profit / (price + costs) * 100,
         "max_buy": max_buy,
@@ -471,14 +493,15 @@ def format_message(ad: lbc.Ad, a: dict, model: dict, cfg: dict) -> str:
         f"<b>{a['label']} · {e(model['nom'])}</b>",
         f"🚗 {e(html.unescape(ad.subject or ''))}",
         f"📋 {e(details)}",
-        f"📍 {e(ad.location.city or '')} ({e(ad.location.zipcode or '')})",
+        f"📍 {e(ad.location.city or '')} ({e(ad.location.zipcode or '')})"
+        + (f" · à {a['dist']:.0f} km" if a["dist"] is not None else ""),
         "",
         f"💶 Prix : <b>{eur(ad.price)}</b>  (ton achat visé {eur(model['achat_vise'][0])}–"
         f"{eur(model['achat_vise'][1])}, max {eur(a['max_buy'])})",
         e(market),
         f"🔁 Revente : {eur(a['resale'])} → {eur(a['net_resale'])} après "
         f"{rent['negociation_revente_pct']} % de négo",
-        f"🧾 Frais : {eur(a['costs'])}",
+        f"🧾 Frais : {eur(a['costs'])}" + (f" (dont trajet {eur(a['trip'])})" if a["trip"] else ""),
         f"💰 <b>Bénéfice au prix affiché : {a['profit']:+,.0f} €</b> "
         f"(rentabilité {a['roi']:.0f} %)".replace(",", " "),
         f"🤝 Propose <b>{eur(a['offer'])}</b> → bénéfice {a['offer_profit']:+,.0f} €".replace(",", " "),

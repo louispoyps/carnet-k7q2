@@ -17,7 +17,13 @@ intervalle_minutes: 10
 rapport_marche_heure: 8
 
 # Départements où chercher, ex : ["13", "83", "84"]. Vide = toute la France.
-departements: ["13", "84", "83", "30", "04"]
+departements: []
+
+# Chez toi : sert à calculer la distance et le coût du trajet pour aller chercher la voiture
+domicile:
+  ville: "Marseille"
+  lat: 43.2965
+  lng: 5.3698
 
 # ------------------------------------------------------------
 #  Calcul de rentabilité
@@ -26,7 +32,12 @@ departements: ["13", "84", "83", "30", "04"]
 # ------------------------------------------------------------
 rentabilite:
   negociation_revente_pct: 8    # ce que tu lâches à la revente
-  frais_fixes: 500              # CT, nettoyage, trajet, imprévus
+  frais_fixes: 500              # CT, nettoyage, trajet proche, imprévus
+  # Trajet : au-delà de X km (déjà compris dans les frais fixes), on ajoute
+  # le coût par km (train ou bus pour y aller + carburant et péage au retour)
+  trajet_inclus_km: 50
+  cout_trajet_km: 0.25
+  distance_max_km: null         # ex : 500 pour ignorer les voitures trop loin
   marge_min: 500                # bénéfice minimum pour être alerté
   # Prudent : revente = le plus bas entre le marché en direct et le milieu de ta grille
   prudent: true
