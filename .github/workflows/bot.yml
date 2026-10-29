@@ -2,10 +2,9 @@ name: Bot Leboncoin
 
 on:
   schedule:
-    # Toutes les 15 min de 7h à 22h45 (heure d'hiver ; 8h-23h45 en été).
-    # Heures en UTC. Calibré pour rester sous les 2 000 min/mois gratuites d'un dépôt privé.
+    # Toutes les 10 min, 24h/24 (dépôt public : minutes illimitées).
     # GitHub peut décaler un passage de quelques minutes.
-    - cron: "*/15 6-21 * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:          # bouton "Run workflow" pour lancer à la main
 
 permissions:
