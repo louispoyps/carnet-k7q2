@@ -2,10 +2,10 @@ name: Bot Leboncoin
 
 on:
   schedule:
-    # Toutes les 30 min de 7h à 21h30 (heure d'hiver ; 8h-22h30 en été).
+    # Toutes les 15 min de 7h à 22h45 (heure d'hiver ; 8h-23h45 en été).
     # Heures en UTC. Calibré pour rester sous les 2 000 min/mois gratuites d'un dépôt privé.
     # GitHub peut décaler un passage de quelques minutes.
-    - cron: "*/30 6-20 * * *"
+    - cron: "*/15 6-21 * * *"
   workflow_dispatch:          # bouton "Run workflow" pour lancer à la main
 
 permissions:
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   chasse:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +34,8 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Leboncoin bloque les serveurs de GitHub : on passe par le proxy résidentiel
+          PROXY_URL: ${{ secrets.PROXY_URL }}
 
       # Mémorise les annonces déjà envoyées pour ne pas les renvoyer
       - name: Sauvegarde des annonces vues
@@ -41,6 +43,6 @@ jobs:
         run: |
           git config user.name "bot-leboncoin"
           git config user.email "bot-leboncoin@users.noreply.github.com"
-          git add annonces_vues.json 2>/dev/null || exit 0
+          git add -f annonces_vues.json 2>/dev/null || exit 0
           git commit -m "maj annonces vues" || exit 0
           git pull --rebase -X theirs && git push

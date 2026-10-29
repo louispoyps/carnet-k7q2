@@ -419,7 +419,6 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
     market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
     notify = SEEN_FILE.exists()
     seen = load_seen()
-    last_report = None
     if not notify:
         log.info("Premier lancement : les annonces déjà en ligne sont mémorisées sans être envoyées")
     while True:
@@ -431,12 +430,16 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
             log.exception("Erreur inattendue : %s", e)
             client = make_client()
             market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
-        # Rapport du marché, une fois par jour à l'heure choisie
+        # Rapport du marché, une fois par jour dès l'heure choisie. La date du dernier envoi
+        # est gardée avec les annonces vues, pour survivre aux redémarrages (GitHub Actions).
         now = datetime.now(PARIS)
-        if ok and now.hour == cfg.get("rapport_marche_heure", -1) and last_report != now.date():
+        hour = cfg.get("rapport_marche_heure")
+        today = now.date().isoformat()
+        if ok and hour is not None and now.hour >= hour and seen.get("_rapport_marche") != today:
             try:
                 market_report(client, tg, cfg)
-                last_report = now.date()
+                seen["_rapport_marche"] = today
+                save_seen(seen)
             except Exception as e:
                 log.warning("Rapport du marché impossible : %s", e)
         if status is not None:
