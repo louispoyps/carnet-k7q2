@@ -24,7 +24,7 @@ status = {"last_pass": None, "searches_ok": None, "searches_total": None}
 
 def test_leboncoin() -> str:
     try:
-        result = bot.make_client().search(category=lbc.Category.VEHICULES_VOITURES, limit=5)
+        result = bot.make_client().search(category=lbc.Category.ELECTRONIQUE_CONSOLES, limit=5)
         return f"OK : Leboncoin répond ({len(result.ads)} annonces reçues)"
     except Exception as e:
         return f"BLOQUÉ : {e}"

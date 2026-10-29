@@ -1,18 +1,17 @@
 """
-Bot achat-revente Leboncoin -> Telegram.
+Bot achat-revente de consoles Leboncoin -> Telegram.
 
-Pour chaque modèle de ta grille (config.yaml), le bot :
-  - cherche les nouvelles annonces à prix bas,
-  - calcule le prix du marché en direct (annonces comparables),
-  - le compare à ta fourchette de prix,
-  - vérifie l'historique (rapport Autoviza fourni par Leboncoin),
+Pour chaque console de ta grille (config.yaml), le bot :
+  - cherche les nouvelles annonces du jour, avec livraison, à prix bas,
+  - écarte les consoles en panne, "main propre uniquement", accessoires seuls...,
+  - calcule le prix du marché en direct et le compare à ta fourchette de revente,
   - calcule ton bénéfice estimé et t'envoie les bonnes affaires sur Telegram.
 
 Usage :
     python bot.py               boucle infinie
     python bot.py --once        un seul passage
     python bot.py --dry-run     affiche dans la console au lieu d'envoyer
-    python bot.py --marche      état du marché de chaque modèle vs ta grille
+    python bot.py --marche      état du marché de chaque console vs ta grille
     python bot.py --chat-id     affiche ton chat_id Telegram
     python bot.py --test        envoie un message de test sur Telegram
 """
@@ -21,7 +20,6 @@ import argparse
 import html
 import json
 import logging
-import math
 import os
 import re
 import statistics
@@ -34,7 +32,6 @@ from zoneinfo import ZoneInfo
 
 import lbc
 import yaml
-from bs4 import BeautifulSoup
 from curl_cffi import requests
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -43,8 +40,7 @@ SECRET_FILE = BASE_DIR / "secret.yaml"  # token Telegram local, jamais envoyé s
 SEEN_FILE = BASE_DIR / "annonces_vues.json"
 
 PARIS = ZoneInfo("Europe/Paris")
-
-FUELS = {"essence": "1", "diesel": "2", "hybride": "6", "electrique": "4", "électrique": "4"}
+CATEGORY = lbc.Category.ELECTRONIQUE_CONSOLES
 
 sys.stdout.reconfigure(encoding="utf-8")
 logging.basicConfig(
@@ -67,6 +63,7 @@ def load_config() -> dict:
     if SECRET_FILE.exists():
         with open(SECRET_FILE, encoding="utf-8") as f:
             cfg["telegram"].update(yaml.safe_load(f).get("telegram", {}))
+    cfg["produits"] = [p for p in cfg["produits"] if p.get("actif", True)]
     return cfg
 
 
@@ -92,17 +89,6 @@ def attr_label(ad: lbc.Ad, key: str) -> str | None:
     return a.value_label if a else None
 
 
-def to_int(value) -> int | None:
-    try:
-        return int(str(value).replace(" ", ""))
-    except (TypeError, ValueError):
-        return None
-
-
-def normalize(text: str) -> str:
-    return " ".join(text.replace("\xa0", " ").replace(" ", " ").split())
-
-
 def eur(value: float) -> str:
     return f"{value:,.0f} €".replace(",", " ")
 
@@ -111,25 +97,12 @@ def has_word(text: str, word: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text) is not None
 
 
-def round_down(value: float, step: int = 50) -> int:
+def round_down(value: float, step: int = 5) -> int:
     return int(value // step * step)
 
 
-def locations(cfg: dict) -> list[lbc.Department] | None:
-    wanted = {str(d).lstrip("0") for d in cfg.get("departements") or []}
-    found = [d for d in lbc.Department if len(d.value) == 4 and d.value[2].lstrip("0") in wanted]
-    return found or None
-
-
-def distance_km(cfg: dict, ad: lbc.Ad) -> float | None:
-    """Distance par la route (estimée) entre chez toi et la voiture."""
-    home = cfg.get("domicile")
-    lat, lng = ad.location.lat, ad.location.lng
-    if not home or lat is None or lng is None:
-        return None
-    la1, lo1, la2, lo2 = map(math.radians, (home["lat"], home["lng"], lat, lng))
-    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
-    return 2 * 6371 * math.asin(math.sqrt(h)) * 1.25  # x1,25 : la route n'est pas à vol d'oiseau
+def title_of(ad: lbc.Ad) -> str:
+    return html.unescape(ad.subject or "")
 
 
 def make_client() -> lbc.Client:
@@ -143,306 +116,183 @@ def make_client() -> lbc.Client:
                                       password=u.password, scheme=u.scheme))
 
 
-def model_filters(model: dict) -> dict:
-    kwargs = {
-        "u_car_brand": [model["marque"]],
-        "u_car_model": [model["modele"]],
-        "regdate": [int(y) for y in model["annees"]],
-        "mileage": [int(k) for k in model["km"]],
-    }
-    if model.get("carburant"):
-        kwargs["fuel"] = [FUELS[model["carburant"].lower()]]
-    return kwargs
+def search(client: lbc.Client, product: dict, cfg: dict, limit: int, **kwargs) -> list[lbc.Ad]:
+    """Annonces de consoles (pas d'accessoires) livrables pour ce produit."""
+    result = client.search(
+        category=CATEGORY, limit=limit,
+        video_game_type=["console"], console_model=product["modeles"],
+        shipping_type=cfg["modes_envoi"], **kwargs,
+    )
+    return result.ads
 
 
-def matches_power(ad: lbc.Ad, model: dict) -> bool:
-    target = model.get("puissance_ch")
-    hp = to_int(attr(ad, "horse_power_din"))
-    return not target or hp is None or abs(hp - target) <= 5
+def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
+    """Motif de rejet d'une annonce (hors prix), ou None si elle est acceptable."""
+    title = title_of(ad).lower()
+    text = f"{title} {ad.body or ''}".lower()
+    for w in cfg.get("titre_exclut", []) + product.get("titre_exclut", []):
+        if has_word(title, w):
+            return f"titre « {w} »"
+    first = re.sub(r"^[^\w]+", "", title).split(" ", 1)[0]
+    if first in cfg.get("titre_debut_exclut", []):
+        return f"accessoire (titre commence par « {first} »)"
+    head = re.split(r"\+|\bavec\b|&|\bet\b", title, maxsplit=1)[0]
+    for w in cfg.get("mots_accessoires", []):
+        if has_word(head, w):
+            return f"accessoire seul (« {w} »)"
+    weight = int(attr(ad, "estimated_parcel_weight") or 0)
+    if 200 <= weight < product.get("poids_min_g", 0):  # < 200 g : poids non renseigné
+        return f"colis trop léger pour la console ({weight} g)"
+    if ad.price and ad.price < product.get("prix_min", 0):
+        return f"prix trop bas pour une vraie console ({eur(ad.price)})"
+    if attr(ad, "video_game_type") not in (None, "console"):
+        return "pas une console"
+    if attr(ad, "condition") == "pourpieces":
+        return "vendue pour pièces"
+    if attr(ad, "shippable") != "true":
+        return "pas de livraison"
+    for w in cfg.get("mots_main_propre", []):
+        if w in text:
+            return f"main propre uniquement (« {w} »)"
+    for w in cfg.get("mots_interdits", []):
+        if has_word(text, w):
+            return f"console à problème (« {w} »)"
+    return None
 
 
-def fingerprint(ad: lbc.Ad) -> str | None:
-    """Empreinte de la voiture, pour reconnaître une annonce republiée sous un autre numéro."""
-    km = attr(ad, "mileage")
-    if not km:
-        return None
-    return "fp:" + "|".join(str(x) for x in (
-        attr(ad, "u_car_model"), attr(ad, "regdate"), km, ad.location.zipcode))
+def fingerprint(ad: lbc.Ad) -> str:
+    """Empreinte de l'annonce, pour reconnaître une annonce republiée sous un autre numéro."""
+    title = re.sub(r"\W+", " ", title_of(ad).lower()).strip()
+    return f"fp:{title}|{ad.location.zipcode}|{attr(ad, 'console_model')}"
 
 
 def already_seen(ad: lbc.Ad, seen: dict) -> bool:
-    fp = fingerprint(ad)
-    return str(ad.id) in seen or (fp is not None and fp in seen)
+    return str(ad.id) in seen or fingerprint(ad) in seen
 
 
 def mark_seen(ad: lbc.Ad, seen: dict) -> None:
     now = datetime.now().isoformat()
     seen[str(ad.id)] = now
-    fp = fingerprint(ad)
-    if fp:
-        seen[fp] = now
+    seen[fingerprint(ad)] = now
 
 
 # ------------------------------------------------------------- prix marché
 
 class MarketPrice:
-    """Prix médian d'annonces comparables, avec cache."""
+    """Prix du marché de chaque console (annonces livrables en état de marche), avec cache."""
 
-    def __init__(self, client: lbc.Client):
+    def __init__(self, client: lbc.Client, cache_minutes: int = 120):
         self.client = client
-        self.cache: dict[tuple, list[tuple[int, float]]] = {}
+        self.ttl = cache_minutes * 60
+        self.cache: dict[str, tuple[float, list[float]]] = {}
 
-    def _search(self, **kwargs) -> list[tuple[int, float]]:
-        key = tuple(sorted((k, tuple(v)) for k, v in kwargs.items()))
-        if key not in self.cache:
-            result = self.client.search(
-                category=lbc.Category.VEHICULES_VOITURES, limit=100, **kwargs
-            )
-            self.cache[key] = [(a.id, a.price) for a in result.ads if a.price and a.price > 500]
+    def prices(self, product: dict, cfg: dict) -> list[float]:
+        name = product["nom"]
+        if name not in self.cache or time.time() - self.cache[name][0] > self.ttl:
+            ads = search(self.client, product, cfg, limit=100)
+            prices = sorted(a.price for a in ads if a.price and not rejection(a, product, cfg))
+            self.cache[name] = (time.time(), prices)
             time.sleep(1.5)
-        return self.cache[key]
+        return self.cache[name][1]
 
-    def for_ad(self, ad: lbc.Ad, min_count: int = 6) -> tuple[float | None, int]:
-        """Médiane des annonces de même modèle, année ±1, km proche (toute la France)."""
-        year = to_int(attr(ad, "regdate"))
-        if not year:
-            return None, 0
-        km = to_int(attr(ad, "mileage"))
-        base = {"u_car_brand": [attr(ad, "u_car_brand")],
-                "u_car_model": [attr(ad, "u_car_model")]}
-        if km:
-            base["mileage"] = [int(km * 0.7), int(km * 1.3) + 10000]
-        fuel = attr(ad, "fuel")
-        prices = []
-        for fuel_f, delta in ((fuel, 1), (fuel, 2), (None, 2)):
-            kwargs = dict(base, regdate=[year - delta, year + delta])
-            if fuel_f:
-                kwargs["fuel"] = [fuel_f]
-            prices = [p for i, p in self._search(**kwargs) if i != ad.id]
-            if len(prices) >= min_count:
-                return statistics.median(prices), len(prices)
-        return None, len(prices)
-
-    def for_model(self, model: dict) -> list[float]:
-        return [p for _, p in self._search(**model_filters(model))]
-
-
-# ------------------------------------------------------ rapport historique
-
-def check_history(url: str, listed_km: int | None) -> dict:
-    """Lit le rapport Autoviza et en extrait les points importants."""
-    r = requests.get(url, impersonate="chrome", timeout=30)
-    r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
-    for tag in soup(["script", "style"]):
-        tag.decompose()
-    text = normalize(soup.get_text(" "))
-
-    info = {
-        "owners": None,
-        "accidents": 0,
-        "atypical": [],
-        "pro_usage": [],
-        "km_readings": [],
-        "km_incoherent": False,
-        "damaged": False,
-    }
-
-    m = re.search(r"transmise par (\d+) propriétaires?", text)
-    if m:
-        info["owners"] = int(m.group(1))
-
-    hist = text
-    m = re.search(r"Historique du véhicule(.*?)(Services vendeur|A propos des données)", text)
-    if m:
-        hist = m.group(1)
-
-    info["accidents"] = len(re.findall(r"Type de sinistre", hist))
-    if info["accidents"] == 0 and "partenaire expertise" in hist:
-        info["accidents"] = 1
-
-    m = re.search(r"(\d+) opérations? atypiques? détectées?\s*\.?(.*?)Vérification", text)
-    if m and int(m.group(1)) > 0:
-        info["atypical"] = [s.strip(" .") for s in m.group(2).split("•")
-                            if s.strip(" .") and not s.strip().startswith("Aucune")]
-
-    for label in ("Location courte-durée", "Démonstration", "Auto-école",
-                  "Taxi/VTC", "Administratif", "Autre"):
-        m = re.search(re.escape(label) + r" (Non détecté|Détecté|détecté)", text)
-        if m and m.group(1) != "Non détecté":
-            info["pro_usage"].append(label)
-
-    # Relevés km (affichés du plus récent au plus ancien)
-    readings = [to_int(k) for k in re.findall(r"(?<!\d)(\d{1,3}(?: \d{3})+|\d{4,6}) km", hist)]
-    readings = [k for k in readings if k]
-    info["km_readings"] = readings
-    if readings:
-        if listed_km is not None and max(readings) > listed_km * 1.05 + 5000:
-            info["km_incoherent"] = True
-        if any(newer < older - 1000 for newer, older in zip(readings, readings[1:])):
-            info["km_incoherent"] = True
-
-    if re.search(r"gravement endommagé|procédure VE|VGE|VEI", hist, re.I):
-        info["damaged"] = True
-    return info
-
-
-def history_verdict(ad: lbc.Ad, crit: dict, good: list, warn: list) -> str | None:
-    """Ajoute les points d'historique ; renvoie un motif de rejet ou None."""
-    km = to_int(attr(ad, "mileage"))
-    url = attr(ad, "vehicle_history_report_public_url")
-    h = None
-    if url:
-        try:
-            h = check_history(url, km)
-        except Exception as e:
-            log.warning("  rapport illisible (%s) : %s", e, url)
-    if h is None:
-        if crit.get("exiger_rapport"):
-            return "pas de rapport d'historique"
-        warn.append("Pas de rapport d'historique : demande le code HistoVec au vendeur")
-        return None
-
-    if h["owners"] is not None:
-        if h["owners"] > crit.get("proprietaires_max", 99):
-            return f"{h['owners']} propriétaires"
-        (good if h["owners"] <= 3 else warn).append(f"{h['owners']} propriétaire(s)")
-    if h["accidents"]:
-        if crit.get("rejeter_si_sinistre", True):
-            return "sinistre déclaré"
-        warn.append(f"{h['accidents']} sinistre(s) / expertise(s)")
-    else:
-        good.append("Aucun sinistre connu")
-    if h["km_incoherent"]:
-        if crit.get("rejeter_si_km_incoherent", True):
-            return f"kilométrage incohérent {h['km_readings']}"
-        warn.append(f"Kilométrage incohérent ! relevés : {h['km_readings']}")
-    elif h["km_readings"]:
-        good.append(f"Kilométrage cohérent ({len(h['km_readings'])} relevé(s))")
-    if h["damaged"]:
-        if crit.get("rejeter_si_vehicule_endommage", True):
-            return "procédure véhicule endommagé"
-        warn.append("Procédure véhicule endommagé (VE/VGE)")
-    if h["pro_usage"]:
-        if crit.get("rejeter_si_usage_pro"):
-            return "usage pro " + ", ".join(h["pro_usage"])
-        warn.append("Usage pro : " + ", ".join(h["pro_usage"]))
-    warn.extend(h["atypical"])
-    return None
+    def median(self, product: dict, cfg: dict) -> tuple[float | None, int]:
+        prices = self.prices(product, cfg)
+        if len(prices) < 6:
+            return None, len(prices)
+        return statistics.median(prices), len(prices)
 
 
 # ----------------------------------------------------------------- analyse
 
-def analyse(ad: lbc.Ad, model: dict, market: MarketPrice, cfg: dict) -> dict | None:
+def costs_for(price: float, rent: dict) -> float:
+    return rent["frais_achat_fixe"] + price * rent["frais_achat_pct"] / 100
+
+
+def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict | None:
     """Calcule la rentabilité ; renvoie l'analyse si l'affaire vaut le coup, sinon None."""
     rent = cfg["rentabilite"]
     price = ad.price
-    if not price or not matches_power(ad, model):
+    if not price:
+        return None
+    reason = rejection(ad, product, cfg)
+    if reason:
+        log.info("  ignorée (%s) : %s", reason, title_of(ad))
         return None
 
-    title = html.unescape(ad.subject or "").lower()
-    if model.get("titre_contient") and not any(has_word(title, w) for w in model["titre_contient"]):
-        log.info("  ignoré (titre hors modèle) : %s", ad.subject)
-        return None
-    if any(has_word(title, w) for w in model.get("titre_exclut", [])):
-        log.info("  ignoré (autre modèle) : %s", ad.subject)
-        return None
-
-    text = f"{ad.subject} {ad.body or ''}".lower()
-    bad = [w for w in cfg.get("mots_interdits", []) if has_word(text, w)]
-    if bad:
-        log.info("  rejet (mots %s) : %s", bad, ad.subject)
-        return None
-
+    text = f"{title_of(ad)} {ad.body or ''}".lower()
     good, warn = [], []
-
-    # --- frais
-    damage = attr(ad, "vehicle_damage") or ""
-    if damage == "damaged" and cfg["historique"].get("rejeter_si_vehicule_endommage", True):
-        log.info("  rejet (endommagé) : %s", ad.subject)
-        return None
-    if damage:
-        text += " " + (attr_label(ad, "vehicle_damage") or "").lower()
-    costs = rent["frais_fixes"]
-    dist = distance_km(cfg, ad)
-    trip = 0.0
-    if dist is not None:
-        if rent.get("distance_max_km") and dist > rent["distance_max_km"]:
-            log.info("  trop loin (%.0f km) : %s", dist, ad.subject)
-            return None
-        trip = max(0.0, dist - rent.get("trajet_inclus_km", 50)) * rent.get("cout_trajet_km", 0.25)
-        costs += trip
-    extra = {w: c for w, c in (cfg.get("frais_travaux") or {}).items() if w in text}
-    if extra:
-        costs += max(extra.values())
-        warn.append("Travaux mentionnés : " + ", ".join(extra) + f" (+{eur(max(extra.values()))})")
+    repairs = {w: c for w, c in (cfg.get("frais_reparation") or {}).items() if w in text}
+    repair_cost = sum(repairs.values())
+    if repairs:
+        warn.append("À prévoir : " + ", ".join(repairs) + f" (+{eur(repair_cost)})")
     good += [f"« {w} »" for w in cfg.get("mots_positifs", []) if w in text]
+    if attr(ad, "condition") == "etatsatisfaisant":
+        warn.append("État satisfaisant (traces d'usure)")
 
-    # --- prix du marché : en direct, comparé à ta grille
-    grid_low, grid_high = model["prix_moyen"]
-    grid_mid = (grid_low + grid_high) / 2
-    live, n = market.for_ad(ad)
+    # --- prix du marché : en direct, comparé à ta fourchette de revente
+    low, high = product["revente"]
+    mid = (low + high) / 2
+    live, n = market.median(product, cfg)
     if live:
-        if live < grid_low * 0.9:
-            market_note = f"⬇️ plus bas que ta grille ({eur(grid_low)}–{eur(grid_high)})"
-        elif live > grid_high * 1.1:
-            market_note = f"⬆️ plus haut que ta grille ({eur(grid_low)}–{eur(grid_high)})"
+        if live < low * 0.9:
+            market_note = f"⬇️ plus bas que ta revente prévue ({eur(low)}–{eur(high)})"
+        elif live > high * 1.1:
+            market_note = f"⬆️ plus haut que ta revente prévue ({eur(low)}–{eur(high)})"
         else:
-            market_note = f"✔ conforme à ta grille ({eur(grid_low)}–{eur(grid_high)})"
-        resale = min(live, grid_mid) if rent.get("prudent", True) else live
+            market_note = f"✔ conforme à ta revente prévue ({eur(low)}–{eur(high)})"
+        resale = min(live, mid) if rent.get("prudent", True) else live
     else:
         market_note = f"pas assez d'annonces ({n}), estimation via ta grille"
-        resale = grid_mid
+        resale = mid
 
     # --- rentabilité
     net_resale = resale * (1 - rent["negociation_revente_pct"] / 100)
-    profit = net_resale - costs - price
-    max_buy = net_resale - costs - rent["marge_min"]
-    if rent.get("respecter_grille", True):
-        max_buy = min(max_buy, model["achat_max"])
-    negotiable_up_to = max_buy * (1 + rent["marge_negociation_achat_pct"] / 100)
-
-    if price > negotiable_up_to:
-        log.info("  trop cher %s (max %s) : %s", eur(price), eur(max_buy), ad.subject)
+    costs = costs_for(price, rent) + repair_cost
+    profit = net_resale - price - costs
+    # achat max : le prix qui laisse encore la marge minimum
+    max_buy = (net_resale - rent["frais_achat_fixe"] - repair_cost - rent["marge_min"]) \
+        / (1 + rent["frais_achat_pct"] / 100)
+    max_buy = min(max_buy, product["achat"][1])
+    if price > max_buy * (1 + rent["marge_negociation_achat_pct"] / 100):
+        log.info("  trop cher %s (max %s) : %s", eur(price), eur(max_buy), title_of(ad))
         return None
 
-    ref = live or grid_mid
-    if price < ref * rent.get("prix_suspect_pct", 50) / 100:
-        warn.insert(0, "Prix anormalement bas : arnaque possible ou gros défaut caché !")
+    if price < resale * rent.get("prix_suspect_pct", 55) / 100:
+        warn.insert(0, "Prix anormalement bas : arnaque possible. Paie UNIQUEMENT via le "
+                       "paiement sécurisé Leboncoin, jamais par virement ou en dehors du site")
 
-    reason = history_verdict(ad, cfg["historique"], good, warn)
-    if reason:
-        log.info("  rejet (%s) : %s", reason, ad.subject)
-        return None
-
-    vise_low, vise_high = model["achat_vise"]
-    if price <= max_buy and price <= vise_high:
-        level, label = 3, "🔥🔥 AFFAIRE EN OR"
-        offer = min(price, max(vise_low, round_down(price * 0.93)))
-    elif price <= max_buy:
-        level, label = 2, "🔥 BONNE AFFAIRE"
-        offer = max(vise_high, round_down(price * 0.92))
+    score, count = attr(ad, "rating_score"), attr(ad, "rating_count")
+    if count and int(count) > 0:
+        stars = float(score or 0) * 5
+        (good if stars >= 4.5 else warn).append(f"Vendeur noté {stars:.1f}/5 ({count} avis)")
     else:
-        level, label = 1, "💬 À NÉGOCIER"
+        warn.append("Vendeur sans avis")
+
+    buy_low = product["achat"][0]
+    if price <= max_buy and price <= buy_low:
+        label = "🔥🔥 AFFAIRE EN OR"
+        offer = price
+    elif price <= max_buy:
+        label = "🔥 BONNE AFFAIRE"
+        offer = max(buy_low, round_down(price * 0.93))
+    else:
+        label = "💬 À NÉGOCIER"
         offer = round_down(max_buy)
     offer = min(offer, price)
 
     return {
         "label": label,
-        "level": level,
         "live": live,
         "count": n,
         "market_note": market_note,
         "resale": resale,
         "net_resale": net_resale,
         "costs": costs,
-        "dist": dist,
-        "trip": trip,
         "profit": profit,
         "roi": profit / (price + costs) * 100,
         "max_buy": max_buy,
         "offer": offer,
-        "offer_profit": net_resale - costs - offer,
+        "offer_profit": net_resale - offer - costs_for(offer, rent) - repair_cost,
         "good": good,
         "warn": warn,
     }
@@ -474,79 +324,69 @@ class Telegram:
             log.error("Erreur Telegram : %s", r.text)
 
 
-def format_message(ad: lbc.Ad, a: dict, model: dict, cfg: dict) -> str:
+def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
     e = html.escape
     rent = cfg["rentabilite"]
-    km = to_int(attr(ad, "mileage"))
     details = " · ".join(filter(None, [
-        attr(ad, "regdate"),
-        f"{km:,} km".replace(",", " ") if km else None,
-        attr_label(ad, "fuel"),
-        attr_label(ad, "gearbox"),
-        attr_label(ad, "horse_power_din"),
+        attr_label(ad, "console_model"),
+        attr_label(ad, "condition"),
+        attr_label(ad, "electronic_color"),
+        "envoi " + (attr(ad, "shipping_type") or "").replace("_", " "),
     ]))
     if a["live"]:
         market = f"📊 Marché : {eur(a['live'])} (médiane de {a['count']} annonces) {a['market_note']}"
     else:
         market = f"📊 Marché : {a['market_note']}"
     lines = [
-        f"<b>{a['label']} · {e(model['nom'])}</b>",
-        f"🚗 {e(html.unescape(ad.subject or ''))}",
+        f"<b>{a['label']} · {e(product['nom'])}</b>",
+        f"🎮 {e(title_of(ad))}",
         f"📋 {e(details)}",
-        f"📍 {e(ad.location.city or '')} ({e(ad.location.zipcode or '')})"
-        + (f" · à {a['dist']:.0f} km" if a["dist"] is not None else ""),
+        f"📍 {e(ad.location.city or '')} ({e(ad.location.zipcode or '')})",
         "",
-        f"💶 Prix : <b>{eur(ad.price)}</b>  (ton achat visé {eur(model['achat_vise'][0])}–"
-        f"{eur(model['achat_vise'][1])}, max {eur(a['max_buy'])})",
+        f"💶 Prix : <b>{eur(ad.price)}</b>  (ton achat {eur(product['achat'][0])}–"
+        f"{eur(product['achat'][1])}, max {eur(a['max_buy'])})",
         e(market),
         f"🔁 Revente : {eur(a['resale'])} → {eur(a['net_resale'])} après "
         f"{rent['negociation_revente_pct']} % de négo",
-        f"🧾 Frais : {eur(a['costs'])}" + (f" (dont trajet {eur(a['trip'])})" if a["trip"] else ""),
+        f"🧾 Frais d'achat (port, protection, réparations) : {eur(a['costs'])}",
         f"💰 <b>Bénéfice au prix affiché : {a['profit']:+,.0f} €</b> "
         f"(rentabilité {a['roi']:.0f} %)".replace(",", " "),
-        f"🤝 Propose <b>{eur(a['offer'])}</b> → bénéfice {a['offer_profit']:+,.0f} €".replace(",", " "),
     ]
+    if a["offer"] < ad.price:
+        lines.append(f"🤝 Propose <b>{eur(a['offer'])}</b> → bénéfice "
+                     f"{a['offer_profit']:+,.0f} €".replace(",", " "))
     if a["good"] or a["warn"]:
         lines.append("")
     lines += [f"✅ {e(g)}" for g in a["good"]]
     lines += [f"⚠️ {e(w)}" for w in a["warn"]]
-    links = [f'<a href="{ad.url}">Voir l\'annonce</a>']
-    report = attr(ad, "vehicle_history_report_public_url")
-    if report:
-        links.append(f'<a href="{report}">Historique</a>')
-    lines += ["", " | ".join(links)]
+    lines += ["", f'<a href="{ad.url}">Voir l\'annonce</a>']
     return "\n".join(lines)
 
 
 # ------------------------------------------------------------------- boucle
 
-def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict, notify: bool = True) -> int:
-    """Fait un passage sur tous les modèles ; renvoie le nombre de recherches réussies.
+def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
+             market: MarketPrice, notify: bool = True) -> int:
+    """Fait un passage sur toutes les consoles ; renvoie le nombre de recherches réussies.
 
     notify=False : marque les annonces du jour comme vues sans rien envoyer
     (premier lancement, ou redémarrage sur un hébergeur qui a perdu la mémoire).
     """
     today = datetime.now(PARIS).date().isoformat()
-    locs = locations(cfg)
-    market = MarketPrice(client)
     rent = cfg["rentabilite"]
     ok = 0
-    for model in cfg["modeles"]:
-        max_price = int(model["achat_max"] * (1 + rent["marge_negociation_achat_pct"] / 100))
-        if not rent.get("respecter_grille", True):
-            max_price = int(model["prix_moyen"][1])
-        log.info("Recherche : %s (jusqu'à %s)", model["nom"], eur(max_price))
+    for product in cfg["produits"]:
+        max_price = int(product["achat"][1] * (1 + rent["marge_negociation_achat_pct"] / 100))
+        log.info("Recherche : %s (jusqu'à %s)", product["nom"], eur(max_price))
         try:
-            result = client.search(
-                category=lbc.Category.VEHICULES_VOITURES, sort=lbc.Sort.NEWEST,
-                locations=locs, limit=35, price=[300, max_price], **model_filters(model),
-            )
+            ads = search(client, product, cfg, limit=35, sort=lbc.Sort.NEWEST,
+                         price=[int(product.get("prix_min", 10)), max_price])
         except Exception as e:
             log.error("Échec de la recherche (%s)", e)
             continue
         ok += 1
         # Seulement les annonces publiées aujourd'hui, jamais traitées
-        todays = [ad for ad in result.ads if (ad.first_publication_date or "")[:10] >= today]
+        todays = [ad for ad in ads if (ad.first_publication_date or "")[:10] >= today]
         new_ads = [ad for ad in todays if not already_seen(ad, seen)]
         log.info("  %d annonces aujourd'hui, %d nouvelles", len(todays), len(new_ads))
         if not notify:
@@ -557,15 +397,15 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict, notify: bo
             if already_seen(ad, seen):  # republiée dans la même recherche
                 continue
             try:
-                a = analyse(ad, model, market, cfg)
+                a = analyse(ad, product, market, cfg)
             except Exception as e:
                 # Pas marquée comme vue : elle sera réessayée au prochain passage
                 log.warning("  erreur d'analyse sur %s : %s", ad.url, e)
                 continue
             mark_seen(ad, seen)
             if a:
-                log.info("  %s %+.0f € : %s", a["label"], a["profit"], ad.subject)
-                tg.send(format_message(ad, a, model, cfg),
+                log.info("  %s %+.0f € : %s", a["label"], a["profit"], title_of(ad))
+                tg.send(format_message(ad, a, product, cfg),
                         ad.images[0] if ad.images else None)
             save_seen(seen)
         time.sleep(3)
@@ -576,6 +416,7 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict, notify: bo
 def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = None) -> int:
     """Boucle principale ; renvoie le nombre de recherches réussies au dernier passage."""
     client = make_client()
+    market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
     notify = SEEN_FILE.exists()
     seen = load_seen()
     last_report = None
@@ -584,11 +425,12 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
     while True:
         ok = 0
         try:
-            ok = run_once(client, tg, cfg, seen, notify)
+            ok = run_once(client, tg, cfg, seen, market, notify)
             notify = True
         except Exception as e:
             log.exception("Erreur inattendue : %s", e)
             client = make_client()
+            market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
         # Rapport du marché, une fois par jour à l'heure choisie
         now = datetime.now(PARIS)
         if ok and now.hour == cfg.get("rapport_marche_heure", -1) and last_report != now.date():
@@ -598,8 +440,8 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
             except Exception as e:
                 log.warning("Rapport du marché impossible : %s", e)
         if status is not None:
-            status.update(last_pass=datetime.now(PARIS).strftime("%d/%m %H:%M"),
-                          searches_ok=ok, searches_total=len(cfg["modeles"]))
+            status.update(last_pass=now.strftime("%d/%m %H:%M"),
+                          searches_ok=ok, searches_total=len(cfg["produits"]))
         if once:
             return ok
         minutes = cfg.get("intervalle_minutes", 10)
@@ -608,27 +450,29 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
 
 
 def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
-    """Prix du marché actuel de chaque modèle comparé à ta grille."""
+    """Prix du marché actuel de chaque console comparé à ta grille."""
     rent = cfg["rentabilite"]
-    market = MarketPrice(client)
+    market = MarketPrice(client, 0)
     day = datetime.now(PARIS).strftime("%d/%m")
-    lines = [f"<b>☀️ Prix du marché du {day}</b> (toute la France)", ""]
-    for model in cfg["modeles"]:
-        prices = sorted(market.for_model(model))
+    lines = [f"<b>☀️ Prix du marché du {day}</b> (consoles livrables, toute la France)", ""]
+    for product in cfg["produits"]:
+        prices = market.prices(product, cfg)
+        name = html.escape(product["nom"])
         if len(prices) < 5:
-            lines.append(f"<b>{html.escape(model['nom'])}</b> : pas assez d'annonces ({len(prices)})\n")
+            lines.append(f"<b>{name}</b> : pas assez d'annonces ({len(prices)})\n")
             continue
         med = statistics.median(prices)
-        low = prices[len(prices) // 4]
-        max_buy = med * (1 - rent["negociation_revente_pct"] / 100) - rent["frais_fixes"] - rent["marge_min"]
-        g_low, g_high = model["prix_moyen"]
-        verdict = "✔ conforme" if g_low * 0.9 <= med <= g_high * 1.1 else (
-            "⬆️ marché plus haut" if med > g_high else "⬇️ marché plus bas")
+        cheap = prices[len(prices) // 4]
+        net = med * (1 - rent["negociation_revente_pct"] / 100)
+        max_buy = (net - rent["frais_achat_fixe"] - rent["marge_min"]) / (1 + rent["frais_achat_pct"] / 100)
+        low, high = product["revente"]
+        verdict = "✔ conforme" if low * 0.9 <= med <= high * 1.1 else (
+            "⬆️ marché plus haut" if med > high else "⬇️ marché plus bas")
         lines.append(
-            f"<b>{html.escape(model['nom'])}</b> ({len(prices)} annonces)\n"
-            f"  médiane {eur(med)} · 25 % les moins chères ≤ {eur(low)}\n"
-            f"  ta grille {eur(g_low)}–{eur(g_high)} → {verdict}\n"
-            f"  achat max recalculé {eur(max_buy)} (ta grille : {eur(model['achat_max'])})\n"
+            f"<b>{name}</b> ({len(prices)} annonces)\n"
+            f"  médiane {eur(med)} · 25 % les moins chères ≤ {eur(cheap)}\n"
+            f"  ta revente {eur(low)}–{eur(high)} → {verdict}\n"
+            f"  achat max recalculé {eur(max_buy)} (ta grille : {eur(product['achat'][1])})\n"
         )
     tg.send("\n".join(lines))
 
