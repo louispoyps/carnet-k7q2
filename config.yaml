@@ -183,10 +183,10 @@ produits:
     achat: [60, 90]
     revente: [100, 140]
 
-  # Switch 2 : donne-moi tes prix et passe actif à true
+  # Prix proposés d'après le marché du 29/10 (25 % les moins chères ≤ 390 €, médiane 480 €)
   - nom: "Switch 2"
-    actif: false
     modeles: ["switch2"]
-    titre_exclut: []
-    achat: [0, 0]
-    revente: [0, 0]
+    titre_exclut: ["switch 1", "oled", "lite"]
+    prix_min: 200
+    achat: [300, 340]
+    revente: [380, 450]
