@@ -18,8 +18,10 @@ Toutes les 10 min, pour chaque console de ta grille (`produits:` dans `config.ya
 Chaque matin à 8h, il envoie aussi le **prix du marché** de chaque console.
 
 ## Où il tourne
-Sur **Render** (gratuit) : https://bot-leboncoin-shvq.onrender.com (`/test` vérifie que Leboncoin répond).
-Leboncoin bloque les serveurs, donc le bot passe par un **proxy résidentiel DataImpulse** (variable `PROXY_URL` dans Render).
+Sur **GitHub Actions** (gratuit, dépôt public) : toutes les 10 min, 24h/24.
+Leboncoin bloque les serveurs de GitHub, donc le bot passe par un **proxy résidentiel DataImpulse**.
+Le token Telegram, le chat_id et le proxy sont dans les **Secrets** du dépôt (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `PROXY_URL`), invisibles même en public.
+Suivi des passages : onglet **Actions** du dépôt.
 Ne lance pas le bot sur ton PC en même temps, sinon tu recevras tout en double.
 
 ## Modifier la grille
@@ -29,7 +31,7 @@ Dans `config.yaml`, section `produits:` :
 - `prix_min` : en dessous, ce n'est jamais une vraie console (accessoires, arnaques).
 - `actif: false` : met une console en pause.
 
-Après une modification, envoie-la sur GitHub : Render se met à jour tout seul.
+Après une modification, envoie-la sur GitHub : le passage suivant l'utilise.
 
 ## Commandes (sur ton PC)
 | Commande | Effet |
