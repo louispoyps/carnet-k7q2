@@ -156,6 +156,11 @@ def make_client() -> lbc.Client:
                                       password=u.password, scheme=u.scheme))
 
 
+def posted_at(ad: lbc.Ad) -> str:
+    """Dernière mise en ligne de l'annonce (publication ou remontée en tête)."""
+    return max(ad.first_publication_date or "", getattr(ad, "index_date", None) or "")
+
+
 def search(client: lbc.Client, product: dict, cfg: dict, limit: int, **kwargs) -> list[lbc.Ad]:
     """Annonces de consoles (pas d'accessoires) livrables pour ce produit."""
     result = client.search(
@@ -494,7 +499,9 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
             continue
         ok += 1
         # Seulement les annonces publiées aujourd'hui, jamais traitées
-        todays = [ad for ad in ads if (ad.first_publication_date or "") >= since]
+        # Date de mise en ligne OU de remontée : une annonce de la semaine dernière
+        # remontée en tête aujourd'hui compte comme une annonce du jour
+        todays = [ad for ad in ads if posted_at(ad) >= since]
         new_ads = [ad for ad in todays if not already_seen(ad, seen)]
         log.info("  %d annonces aujourd'hui, %d nouvelles", len(todays), len(new_ads))
         if not notify:
