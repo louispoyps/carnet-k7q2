@@ -120,7 +120,8 @@ titre_debut_exclut:
 mots_accessoires:
   ["manette", "manettes", "controller", "façade", "façades", "facade", "facades", "split pad",
    "grip", "pochette", "housse", "étui", "etui", "coque", "jeu", "jeux", "joy-con", "joycon",
-   "volant", "casque", "station de charge", "arcade", "fight stick", "panthera"]
+   "volant", "casque", "station de charge", "arcade", "fight stick", "panthera",
+   "storage", "expansion", "carte d'extension", "carte d extension", "kinect", "headset"]
 
 # Réparations ajoutées aux frais si la description contient ces mots
 frais_reparation:
@@ -190,3 +191,36 @@ produits:
     prix_min: 200
     achat: [300, 340]
     revente: [380, 450]
+
+  # Prix proposés d'après le marché du 30/10 (25 % les moins chères ≤ 450 €, médiane 525 €)
+  - nom: "Xbox Series X"
+    modeles: ["xboxseriesx"]
+    titre_exclut: ["series s", "xbox one", "one x", "one s"]
+    prix_min: 200
+    poids_min_g: 2500 # une Series X fait ~4,5 kg ; accessoires bien plus légers
+    achat: [330, 380]
+    revente: [430, 520]
+
+  # Prix proposés d'après le marché du 30/10 (25 % les moins chères ≤ 220 €, médiane 255 €)
+  - nom: "Xbox Series S"
+    modeles: ["xboxseriess"]
+    titre_exclut: ["series x", "xbox one", "one x", "one s"]
+    prix_min: 80
+    achat: [150, 180]
+    revente: [210, 260]
+
+  # PS4 classique et Slim. Prix proposés d'après le marché du 30/10 (25 % ≤ 85 €, médiane 115 €)
+  - nom: "PS4"
+    modeles: ["ps4", "ps4slim"]
+    titre_exclut: ["ps4 pro", "ps5", "ps3", "ps vita"]
+    prix_min: 40
+    achat: [50, 70]
+    revente: [90, 130]
+
+  # PS4 Pro (plus chère). Prix proposés d'après le marché du 30/10 (25 % ≤ 129 €, médiane 150 €)
+  - nom: "PS4 Pro"
+    modeles: ["ps4pro"]
+    titre_exclut: ["ps5", "ps3"]
+    prix_min: 50
+    achat: [85, 110]
+    revente: [130, 180]
