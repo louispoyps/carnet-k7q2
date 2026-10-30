@@ -97,6 +97,25 @@ def has_word(text: str, word: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text) is not None
 
 
+NEGATION_BEFORE = re.compile(r"(?<!\w)(pas|aucun|aucune|sans|jamais|ni|non|zéro|zero)(?!\w)")
+NEGATION_AFTER = re.compile(r"^\s*(pas|jamais|plus)(?!\w)")
+
+
+def mentions_problem(text: str, word: str) -> bool:
+    """Le mot apparaît sans être nié : "surchauffe" oui, "ne surchauffe pas" /
+    "aucun problème de surchauffe" non. Les expressions déjà négatives
+    ("ne marche pas") sont cherchées telles quelles."""
+    if word.startswith("ne ") or " pas" in word or word.startswith("sans "):
+        return has_word(text, word)
+    for m in re.finditer(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text):
+        before = re.split(r"[.!?\n;]", text[max(0, m.start() - 40):m.start()])[-1]
+        after = text[m.end():m.end() + 12]
+        if NEGATION_BEFORE.search(before) or NEGATION_AFTER.search(after):
+            continue
+        return True
+    return False
+
+
 def round_down(value: float, step: int = 5) -> int:
     return int(value // step * step)
 
@@ -155,7 +174,7 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
         if w in text:
             return f"main propre uniquement (« {w} »)"
     for w in cfg.get("mots_interdits", []):
-        if has_word(text, w):
+        if mentions_problem(text, w):
             return f"console à problème (« {w} »)"
     return None
 
@@ -189,7 +208,13 @@ class MarketPrice:
     def prices(self, product: dict, cfg: dict) -> list[float]:
         name = product["nom"]
         if name not in self.cache or time.time() - self.cache[name][0] > self.ttl:
-            ads = search(self.client, product, cfg, limit=100)
+            ads = []
+            for page in range(1, cfg["rentabilite"].get("pages_marche", 3) + 1):
+                batch = search(self.client, product, cfg, limit=100, page=page)
+                ads += batch
+                if len(batch) < 100:
+                    break
+                time.sleep(1)
             prices = sorted(a.price for a in ads if a.price and not rejection(a, product, cfg))
             self.cache[name] = (time.time(), prices)
             time.sleep(1.5)

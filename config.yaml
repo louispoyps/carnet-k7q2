@@ -34,6 +34,8 @@ rentabilite:
   prix_suspect_pct: 55
   # Durée pendant laquelle le prix du marché est réutilisé avant d'être recalculé
   cache_marche_minutes: 120
+  # Nombre de pages de 100 annonces lues pour calculer le prix du marché
+  pages_marche: 3
 
 # ------------------------------------------------------------
 #  Livraison obligatoire
