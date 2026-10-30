@@ -116,7 +116,8 @@ def has_word(text: str, word: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text) is not None
 
 
-BUNDLE_BEFORE = re.compile(r"(?<!\w)(\d+|un|une|deux|trois|quatre|cinq|de|des|plus|avec)\s*$")
+# "2 jeux", "avec manette" : lot avec la console ; "sans manette" : la console vendue seule
+BUNDLE_BEFORE = re.compile(r"(?<!\w)(\d+|un|une|deux|trois|quatre|cinq|de|des|plus|avec|sans)\s*$")
 NEGATION_BEFORE = re.compile(r"(?<!\w)(pas|aucun|aucune|sans|jamais|ni|non|zéro|zero)(?!\w)")
 NEGATION_AFTER = re.compile(r"^\s*(pas|jamais|plus)(?!\w)")
 
@@ -478,11 +479,18 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
     for product in cfg["produits"]:
         max_price = int(product["achat"][1] * (1 + rent["marge_negociation_achat_pct"] / 100))
         log.info("Recherche : %s (jusqu'à %s)", product["nom"], eur(max_price))
-        try:
-            ads = search(client, product, cfg, limit=35, sort=lbc.Sort.NEWEST,
-                         price=[int(product.get("prix_min", 10)), max_price])
-        except Exception as e:
-            log.error("Échec de la recherche (%s)", e)
+        ads = None
+        for attempt in range(3):
+            try:
+                ads = search(client, product, cfg, limit=35, sort=lbc.Sort.NEWEST,
+                             price=[int(product.get("prix_min", 10)), max_price])
+                break
+            except Exception as e:
+                log.error("Échec de la recherche, essai %d/3 (%s)", attempt + 1, e)
+                # Nouvelle connexion = nouvelle IP du proxy ; souvent suffisant
+                client = market.client = make_client()
+                time.sleep(5)
+        if ads is None:
             continue
         ok += 1
         # Seulement les annonces publiées aujourd'hui, jamais traitées
@@ -533,6 +541,8 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
     alert_after = max(1, 60 // cfg.get("intervalle_minutes", 10))  # environ 1 h
     while True:
         ok = 0
+        # Connexion neuve à chaque passage : une connexion proxy coincée ne bloque plus des heures
+        client = market.client = make_client()
         try:
             ok = run_once(client, tg, cfg, seen, market, notify)
             notify = True

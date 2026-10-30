@@ -172,7 +172,7 @@ produits:
     modeles: ["ps5", "ps5slim"]
     titre_exclut: ["ps5 pro", "portal", "playstation portal", "ps vr", "psvr"]
     prix_min: 150     # en dessous, ce n'est jamais une PS5 qui marche
-    poids_min_g: 3000 # une PS5 fait ~5 kg ; manettes et façades < 2 kg
+    poids_min_g: 1500 # poids estimé par le vendeur, souvent faux (2 kg pour une PS5) ; manettes < 1 kg
     achat: [200, 230]
     revente: [280, 350]
 
@@ -203,7 +203,7 @@ produits:
     modeles: ["xboxseriesx"]
     titre_exclut: ["series s", "xbox one", "one x", "one s"]
     prix_min: 200
-    poids_min_g: 2500 # une Series X fait ~4,5 kg ; accessoires bien plus légers
+    poids_min_g: 1500 # poids estimé par le vendeur, souvent faux ; manettes < 1 kg
     achat: [330, 380]
     revente: [430, 520]
 
