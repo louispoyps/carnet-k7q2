@@ -173,10 +173,13 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
     for w in cfg.get("mots_main_propre", []):
         if w in text:
             return f"main propre uniquement (« {w} »)"
-    for w in cfg.get("mots_interdits", []):
-        if mentions_problem(text, w):
-            return f"console à problème (« {w} »)"
     return None
+
+
+def problem_words(ad: lbc.Ad, cfg: dict) -> list[str]:
+    """Mots inquiétants présents dans l'annonce (sans être niés) : signalés dans l'alerte."""
+    text = f"{title_of(ad)} {ad.body or ''}".lower()
+    return [w for w in cfg.get("mots_a_verifier", []) if mentions_problem(text, w)]
 
 
 def fingerprint(ad: lbc.Ad) -> str:
@@ -215,7 +218,9 @@ class MarketPrice:
                 if len(batch) < 100:
                     break
                 time.sleep(1)
-            prices = sorted(a.price for a in ads if a.price and not rejection(a, product, cfg))
+            # Le prix du marché ne compte que les consoles sans mot inquiétant
+            prices = sorted(a.price for a in ads if a.price and not rejection(a, product, cfg)
+                            and not problem_words(a, cfg))
             self.cache[name] = (time.time(), prices)
             time.sleep(1.5)
         return self.cache[name][1]
@@ -267,6 +272,10 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     if repairs:
         warn.append("À prévoir : " + ", ".join(repairs) + f" (+{eur(repair_cost)})")
     good += [f"« {w} »" for w in cfg.get("mots_positifs", []) if w in text]
+    problems = problem_words(ad, cfg)
+    if problems:
+        warn.insert(0, "🚨 L'annonce mentionne : " + ", ".join(f"« {w} »" for w in problems)
+                    + " — lis la description et demande au vendeur si la console marche")
     if attr(ad, "condition") == "etatsatisfaisant":
         warn.append("État satisfaisant (traces d'usure)")
 

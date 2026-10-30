@@ -58,10 +58,12 @@ mots_main_propre:
   - "envoi impossible"
 
 # ------------------------------------------------------------
-#  Consoles qui ne marchent pas
+#  Consoles qui ne marchent peut-être pas
 # ------------------------------------------------------------
-# Annonce ignorée si le titre ou la description contient un de ces mots
-mots_interdits:
+# L'annonce est quand même envoyée, avec un avertissement 🚨 si le titre ou la
+# description contient un de ces mots (sauf s'il est nié : "ne surchauffe pas").
+# Les annonces marquées "Pour pièces" par le vendeur restent ignorées.
+mots_a_verifier:
   - "hs"
   - "ne marche pas"
   - "ne marche plus"
