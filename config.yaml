@@ -23,8 +23,10 @@ rentabilite:
   # Frais quand tu achètes avec la livraison Leboncoin (estimation, ajuste si besoin) :
   frais_achat_fixe: 10          # port Mondial Relay / Colissimo + part fixe des frais de service
   frais_achat_pct: 4            # part des frais de protection proportionnelle au prix
-  marge_min: 30                 # bénéfice minimum pour être alerté
-  # Prudent : revente = le plus bas entre le marché en direct et le milieu de ta fourchette
+  marge_min: 30                 # bénéfice minimum pour être alerté (en €)...
+  marge_min_pct: 15             # ...ou ce % du prix de revente, si c'est plus (65 € sur une console à 450 €)
+  # Revente estimée = prix de vente rapide (25 % des annonces les moins chères).
+  # Prudent : le plus bas entre ce prix et le milieu de ta fourchette de revente
   prudent: true
   # Le bot cherche aussi jusqu'à X % au-dessus de ton achat max (annonces à négocier)
   marge_negociation_achat_pct: 10
@@ -211,6 +213,7 @@ produits:
 
   # PS4 classique et Slim. Prix proposés d'après le marché du 30/10 (25 % ≤ 85 €, médiane 115 €)
   - nom: "PS4"
+    actif: false      # retirée : marges trop faibles
     modeles: ["ps4", "ps4slim"]
     titre_exclut: ["ps4 pro", "ps5", "ps3", "ps vita"]
     prix_min: 40
@@ -219,6 +222,7 @@ produits:
 
   # PS4 Pro (plus chère). Prix proposés d'après le marché du 30/10 (25 % ≤ 129 €, médiane 150 €)
   - nom: "PS4 Pro"
+    actif: false      # en pause : marges trop faibles
     modeles: ["ps4pro"]
     titre_exclut: ["ps5", "ps3"]
     prix_min: 50

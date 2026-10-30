@@ -195,17 +195,33 @@ class MarketPrice:
             time.sleep(1.5)
         return self.cache[name][1]
 
-    def median(self, product: dict, cfg: dict) -> tuple[float | None, int]:
+    def stats(self, product: dict, cfg: dict) -> tuple[float | None, float | None, int]:
+        """(médiane, prix de vente rapide, nombre d'annonces).
+
+        Prix de vente rapide = prix des 25 % les moins chères : pour revendre vite,
+        il faut se placer parmi les moins chers, pas au prix médian affiché.
+        """
         prices = self.prices(product, cfg)
         if len(prices) < 6:
-            return None, len(prices)
-        return statistics.median(prices), len(prices)
+            return None, None, len(prices)
+        return statistics.median(prices), prices[len(prices) // 4], len(prices)
 
 
 # ----------------------------------------------------------------- analyse
 
 def costs_for(price: float, rent: dict) -> float:
     return rent["frais_achat_fixe"] + price * rent["frais_achat_pct"] / 100
+
+
+def margin_for(resale: float, rent: dict) -> float:
+    """Bénéfice minimum : un montant fixe, ou un % du prix de revente si c'est plus."""
+    return max(rent["marge_min"], resale * rent.get("marge_min_pct", 0) / 100)
+
+
+def max_buy_for(net_resale: float, margin: float, rent: dict, repair_cost: float = 0) -> float:
+    """Prix d'achat le plus haut qui laisse encore la marge minimum."""
+    return (net_resale - rent["frais_achat_fixe"] - repair_cost - margin) \
+        / (1 + rent["frais_achat_pct"] / 100)
 
 
 def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict | None:
@@ -232,15 +248,15 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     # --- prix du marché : en direct, comparé à ta fourchette de revente
     low, high = product["revente"]
     mid = (low + high) / 2
-    live, n = market.median(product, cfg)
+    live, quick, n = market.stats(product, cfg)
     if live:
-        if live < low * 0.9:
+        if quick < low * 0.9:
             market_note = f"⬇️ plus bas que ta revente prévue ({eur(low)}–{eur(high)})"
-        elif live > high * 1.1:
+        elif quick > high * 1.1:
             market_note = f"⬆️ plus haut que ta revente prévue ({eur(low)}–{eur(high)})"
         else:
             market_note = f"✔ conforme à ta revente prévue ({eur(low)}–{eur(high)})"
-        resale = min(live, mid) if rent.get("prudent", True) else live
+        resale = min(quick, mid) if rent.get("prudent", True) else quick
     else:
         market_note = f"pas assez d'annonces ({n}), estimation via ta grille"
         resale = mid
@@ -249,10 +265,8 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     net_resale = resale * (1 - rent["negociation_revente_pct"] / 100)
     costs = costs_for(price, rent) + repair_cost
     profit = net_resale - price - costs
-    # achat max : le prix qui laisse encore la marge minimum
-    max_buy = (net_resale - rent["frais_achat_fixe"] - repair_cost - rent["marge_min"]) \
-        / (1 + rent["frais_achat_pct"] / 100)
-    max_buy = min(max_buy, product["achat"][1])
+    margin = margin_for(resale, rent)
+    max_buy = min(max_buy_for(net_resale, margin, rent, repair_cost), product["achat"][1])
     if price > max_buy * (1 + rent["marge_negociation_achat_pct"] / 100):
         log.info("  trop cher %s (max %s) : %s", eur(price), eur(max_buy), title_of(ad))
         return None
@@ -283,6 +297,7 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     return {
         "label": label,
         "live": live,
+        "quick": quick,
         "count": n,
         "market_note": market_note,
         "resale": resale,
@@ -334,7 +349,8 @@ def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
         "envoi " + (attr(ad, "shipping_type") or "").replace("_", " "),
     ]))
     if a["live"]:
-        market = f"📊 Marché : {eur(a['live'])} (médiane de {a['count']} annonces) {a['market_note']}"
+        market = (f"📊 Marché : vente rapide {eur(a['quick'])}, médiane {eur(a['live'])} "
+                  f"({a['count']} annonces) {a['market_note']}")
     else:
         market = f"📊 Marché : {a['market_note']}"
     lines = [
@@ -473,17 +489,19 @@ def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
             lines.append(f"<b>{name}</b> : pas assez d'annonces ({len(prices)})\n")
             continue
         med = statistics.median(prices)
-        cheap = prices[len(prices) // 4]
-        net = med * (1 - rent["negociation_revente_pct"] / 100)
-        max_buy = (net - rent["frais_achat_fixe"] - rent["marge_min"]) / (1 + rent["frais_achat_pct"] / 100)
+        quick = prices[len(prices) // 4]
         low, high = product["revente"]
-        verdict = "✔ conforme" if low * 0.9 <= med <= high * 1.1 else (
-            "⬆️ marché plus haut" if med > high else "⬇️ marché plus bas")
+        # Même calcul que pour les alertes : revente rapide, prudente, marge minimum
+        resale = min(quick, (low + high) / 2) if rent.get("prudent", True) else quick
+        net = resale * (1 - rent["negociation_revente_pct"] / 100)
+        max_buy = min(max_buy_for(net, margin_for(resale, rent), rent), product["achat"][1])
+        verdict = "✔ conforme" if low * 0.9 <= quick <= high * 1.1 else (
+            "⬆️ marché plus haut" if quick > high else "⬇️ marché plus bas")
         lines.append(
             f"<b>{name}</b> ({len(prices)} annonces)\n"
-            f"  médiane {eur(med)} · 25 % les moins chères ≤ {eur(cheap)}\n"
+            f"  vente rapide {eur(quick)} · médiane {eur(med)}\n"
             f"  ta revente {eur(low)}–{eur(high)} → {verdict}\n"
-            f"  achat max recalculé {eur(max_buy)} (ta grille : {eur(product['achat'][1])})\n"
+            f"  achat max du bot : {eur(max_buy)} (ta grille : {eur(product['achat'][1])})\n"
         )
     tg.send("\n".join(lines))
 
