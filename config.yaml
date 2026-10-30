@@ -209,6 +209,7 @@ produits:
 
   # Prix proposés d'après le marché du 30/10 (25 % les moins chères ≤ 220 €, médiane 255 €)
   - nom: "Xbox Series S"
+    actif: false      # retirée à ta demande
     modeles: ["xboxseriess"]
     titre_exclut: ["series x", "xbox one", "one x", "one s"]
     prix_min: 80
