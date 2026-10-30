@@ -508,8 +508,9 @@ def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
 # ------------------------------------------------------------------- boucle
 
 def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
-             market: MarketPrice, notify: bool = True) -> int:
+             market: MarketPrice, notify: bool = True, failed: list | None = None) -> int:
     """Fait un passage sur toutes les consoles ; renvoie le nombre de recherches réussies.
+    failed : reçoit le nom des consoles dont la recherche a échoué.
 
     notify=False : marque les annonces du jour comme vues sans rien envoyer
     (premier lancement, ou redémarrage sur un hébergeur qui a perdu la mémoire).
@@ -537,6 +538,8 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
                 client = market.client = make_client()
                 time.sleep(5)
         if ads is None:
+            if failed is not None:
+                failed.append(product["nom"])
             continue
         ok += 1
         # Seulement les annonces publiées aujourd'hui, jamais traitées
@@ -587,19 +590,27 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
         log.info("Premier lancement : les annonces déjà en ligne sont mémorisées sans être envoyées")
     failures = 0          # passages d'affilée où aucune recherche n'a abouti
     alert_after = max(1, 60 // cfg.get("intervalle_minutes", 10))  # environ 1 h
+    degraded = False      # un échec a déjà été signalé, en attente d'un passage sans échec
     while True:
         ok = 0
+        failed: list[str] = []
         # Connexion neuve à chaque passage : une connexion proxy coincée ne bloque plus des heures
         client = market.client = make_client()
         try:
-            ok = run_once(client, tg, cfg, seen, market, notify)
+            ok = run_once(client, tg, cfg, seen, market, notify, failed)
             notify = True
         except Exception as e:
             log.exception("Erreur inattendue : %s", e)
+            failed = ["toutes les consoles"]
             client = make_client()
             market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
-        # Prévient sur Telegram si le bot ne joint plus Leboncoin (proxy à court de crédit,
-        # blocage...), puis quand ça repart
+        # Prévient sur Telegram au premier échec (une seule fois, pas à chaque passage),
+        # puis après ~1 h de panne complète (proxy à court de crédit, blocage...), puis quand ça repart
+        if failed and not degraded:
+            tg.send(f"⚠️ <b>Recherche ratée</b> malgré 3 essais : {html.escape(', '.join(failed))}.\n"
+                    "Les annonces seront rattrapées au prochain passage qui marche. "
+                    "Je te préviens quand ça repart.")
+            degraded = True
         if ok == 0:
             failures += 1
             if failures == alert_after:
@@ -607,9 +618,10 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
                         "Vérifie ton crédit de proxy (DataImpulse). Le bot continue d'essayer "
                         "et te préviendra quand ça repart.")
         else:
-            if failures >= alert_after:
-                tg.send("✅ Le bot joint de nouveau Leboncoin, la surveillance reprend.")
             failures = 0
+        if not failed and degraded:
+            tg.send("✅ Les recherches marchent de nouveau, la surveillance reprend.")
+            degraded = False
         # Rapport du marché, une fois par jour dès l'heure choisie. La date du dernier envoi
         # est gardée avec les annonces vues, pour survivre aux redémarrages (GitHub Actions).
         now = datetime.now(PARIS)
