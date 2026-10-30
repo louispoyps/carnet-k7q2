@@ -20,6 +20,7 @@ import argparse
 import html
 import json
 import logging
+import logging.handlers
 import os
 import re
 import statistics
@@ -49,7 +50,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(BASE_DIR / "bot.log", encoding="utf-8"),
+        # Journal limité à 3 fichiers de 2 Mo, pour ne pas remplir le disque du serveur
+        logging.handlers.RotatingFileHandler(BASE_DIR / "bot.log", maxBytes=2_000_000,
+                                             backupCount=2, encoding="utf-8"),
     ],
 )
 log = logging.getLogger("bot")
@@ -67,16 +70,25 @@ def load_config() -> dict:
     return cfg
 
 
-def load_seen() -> dict:
-    if SEEN_FILE.exists():
+def load_seen() -> dict | None:
+    """Annonces déjà vues, ou None si le fichier n'existe pas ou est abîmé."""
+    if not SEEN_FILE.exists():
+        return None
+    try:
         return json.loads(SEEN_FILE.read_text(encoding="utf-8"))
-    return {}
+    except (ValueError, OSError) as e:
+        log.warning("Mémoire des annonces illisible (%s) : on repart de zéro", e)
+        return None
 
 
 def save_seen(seen: dict) -> None:
     limit = (datetime.now() - timedelta(days=60)).isoformat()
     seen = {k: v for k, v in seen.items() if v >= limit}
-    SEEN_FILE.write_text(json.dumps(seen), encoding="utf-8")
+    # Écrit dans un fichier temporaire puis le renomme : une coupure pendant
+    # l'écriture ne peut pas abîmer la mémoire
+    tmp = SEEN_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(seen), encoding="utf-8")
+    os.replace(tmp, SEEN_FILE)
 
 
 def attr(ad: lbc.Ad, key: str) -> str | None:
@@ -87,6 +99,13 @@ def attr(ad: lbc.Ad, key: str) -> str | None:
 def attr_label(ad: lbc.Ad, key: str) -> str | None:
     a = ad.attributes.get(key)
     return a.value_label if a else None
+
+
+def to_int(value) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def eur(value: float) -> str:
@@ -102,10 +121,10 @@ NEGATION_BEFORE = re.compile(r"(?<!\w)(pas|aucun|aucune|sans|jamais|ni|non|zéro
 NEGATION_AFTER = re.compile(r"^\s*(pas|jamais|plus)(?!\w)")
 
 
-def mentions_problem(text: str, word: str) -> bool:
-    """Le mot apparaît sans être nié : "surchauffe" oui, "ne surchauffe pas" /
-    "aucun problème de surchauffe" non. Les expressions déjà négatives
-    ("ne marche pas") sont cherchées telles quelles."""
+def mentions(text: str, word: str) -> bool:
+    """Le mot apparaît en entier et sans être nié : "surchauffe" oui, "ne surchauffe pas" /
+    "aucun problème de surchauffe" non ; "complète" oui, "incomplète" / "pas complète" non.
+    Les expressions déjà négatives ("ne marche pas", "sans dock") sont cherchées telles quelles."""
     if word.startswith("ne ") or " pas" in word or word.startswith("sans "):
         return has_word(text, word)
     for m in re.finditer(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text):
@@ -162,7 +181,7 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
             # "2 jeux", "3 manettes", "1to de jeux" : c'est un lot avec la console
             if not BUNDLE_BEFORE.search(head[:m.start()]):
                 return f"accessoire seul (« {w} »)"
-    weight = int(attr(ad, "estimated_parcel_weight") or 0)
+    weight = to_int(attr(ad, "estimated_parcel_weight"))
     if 200 <= weight < product.get("poids_min_g", 0):  # < 200 g : poids non renseigné
         return f"colis trop léger pour la console ({weight} g)"
     if ad.price and ad.price < product.get("prix_min", 0):
@@ -182,7 +201,7 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
 def problem_words(ad: lbc.Ad, cfg: dict) -> list[str]:
     """Mots inquiétants présents dans l'annonce (sans être niés) : signalés dans l'alerte."""
     text = f"{title_of(ad)} {ad.body or ''}".lower()
-    return [w for w in cfg.get("mots_a_verifier", []) if mentions_problem(text, w)]
+    return [w for w in cfg.get("mots_a_verifier", []) if mentions(text, w)]
 
 
 def fingerprint(ad: lbc.Ad) -> str:
@@ -270,11 +289,11 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
 
     text = f"{title_of(ad)} {ad.body or ''}".lower()
     good, warn = [], []
-    repairs = {w: c for w, c in (cfg.get("frais_reparation") or {}).items() if w in text}
+    repairs = {w: c for w, c in (cfg.get("frais_reparation") or {}).items() if mentions(text, w)}
     repair_cost = sum(repairs.values())
     if repairs:
         warn.append("À prévoir : " + ", ".join(repairs) + f" (+{eur(repair_cost)})")
-    good += [f"« {w} »" for w in cfg.get("mots_positifs", []) if w in text]
+    good += [f"« {w} »" for w in cfg.get("mots_positifs", []) if mentions(text, w)]
     problems = problem_words(ad, cfg)
     if problems:
         warn.insert(0, "🚨 L'annonce mentionne : " + ", ".join(f"« {w} »" for w in problems)
@@ -313,7 +332,7 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
                        "paiement sécurisé Leboncoin, jamais par virement ou en dehors du site")
 
     score, count = attr(ad, "rating_score"), attr(ad, "rating_count")
-    if count and int(count) > 0:
+    if to_int(count) > 0:
         stars = float(score or 0) * 5
         (good if stars >= 4.5 else warn).append(f"Vendeur noté {stars:.1f}/5 ({count} avis)")
     else:
@@ -330,6 +349,8 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
         label = "💬 À NÉGOCIER"
         offer = round_down(max_buy)
     offer = min(offer, price)
+    if problems:
+        label = "🚨 À VÉRIFIER · " + label
 
     return {
         "label": label,
@@ -359,21 +380,42 @@ class Telegram:
         self.chat_id = chat_id
         self.dry_run = dry_run
 
-    def send(self, text: str, photo: str | None = None) -> None:
+    def _post(self, method: str, data: dict) -> bool:
+        """Appel Telegram ; attend et réessaie si Telegram demande de ralentir (erreur 429)."""
+        for attempt in range(3):
+            try:
+                r = requests.post(f"{self.api}/{method}", data=data, timeout=30)
+            except Exception as e:
+                log.warning("Telegram injoignable (%s), nouvel essai", e)
+                time.sleep(5)
+                continue
+            if r.ok:
+                return True
+            if r.status_code == 429:
+                wait = to_int(r.json().get("parameters", {}).get("retry_after")) or 5
+                time.sleep(wait + 1)
+                continue
+            log.error("Erreur Telegram (%s) : %s", method, r.text)
+            return False
+        return False
+
+    def send(self, text: str, photo: str | None = None) -> bool:
+        """Envoie le message ; renvoie False s'il n'a pas pu partir."""
         if self.dry_run:
             print("\n" + html.unescape(re.sub(r"<[^>]+>", "", text)) + "\n" + "-" * 60)
-            return
-        if photo and len(text) <= 1024:
-            r = requests.post(f"{self.api}/sendPhoto", data={
-                "chat_id": self.chat_id, "photo": photo,
-                "caption": text, "parse_mode": "HTML"}, timeout=30)
-            if r.ok:
-                return
-        r = requests.post(f"{self.api}/sendMessage", data={
-            "chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
-            "disable_web_page_preview": "true"}, timeout=30)
-        if not r.ok:
-            log.error("Erreur Telegram : %s", r.text)
+            return True
+        if photo and len(text) <= 1024 and self._post("sendPhoto", {
+                "chat_id": self.chat_id, "photo": photo, "caption": text, "parse_mode": "HTML"}):
+            return True
+        # Sans photo (photo refusée ou texte trop long pour une légende)
+        if self._post("sendMessage", {
+                "chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
+                "disable_web_page_preview": "true"}):
+            return True
+        # Dernier essai en texte simple, si c'est la mise en forme que Telegram refuse
+        return self._post("sendMessage", {
+            "chat_id": self.chat_id, "text": html.unescape(re.sub(r"<[^>]+>", "", text)),
+            "disable_web_page_preview": "true"})
 
 
 def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
@@ -425,7 +467,12 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
     notify=False : marque les annonces du jour comme vues sans rien envoyer
     (premier lancement, ou redémarrage sur un hébergeur qui a perdu la mémoire).
     """
-    today = datetime.now(PARIS).date().isoformat()
+    # Annonces du jour... et celles de la fin de soirée, pour ne pas rater
+    # une annonce publiée à 23h55 et trouvée au passage de 0h05
+    now = datetime.now(PARIS)
+    since = min(now.strftime("%Y-%m-%d 00:00:00"),
+                (now - timedelta(minutes=3 * cfg.get("intervalle_minutes", 10)))
+                .strftime("%Y-%m-%d %H:%M:%S"))
     rent = cfg["rentabilite"]
     ok = 0
     for product in cfg["produits"]:
@@ -439,7 +486,7 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
             continue
         ok += 1
         # Seulement les annonces publiées aujourd'hui, jamais traitées
-        todays = [ad for ad in ads if (ad.first_publication_date or "")[:10] >= today]
+        todays = [ad for ad in ads if (ad.first_publication_date or "") >= since]
         new_ads = [ad for ad in todays if not already_seen(ad, seen)]
         log.info("  %d annonces aujourd'hui, %d nouvelles", len(todays), len(new_ads))
         if not notify:
@@ -455,11 +502,13 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
                 # Pas marquée comme vue : elle sera réessayée au prochain passage
                 log.warning("  erreur d'analyse sur %s : %s", ad.url, e)
                 continue
-            mark_seen(ad, seen)
             if a:
                 log.info("  %s %+.0f € : %s", a["label"], a["profit"], title_of(ad))
-                tg.send(format_message(ad, a, product, cfg),
-                        ad.images[0] if ad.images else None)
+                if not tg.send(format_message(ad, a, product, cfg),
+                               ad.images[0] if ad.images else None):
+                    # Pas marquée comme vue : l'alerte sera renvoyée au prochain passage
+                    continue
+            mark_seen(ad, seen)
             save_seen(seen)
         time.sleep(3)
     save_seen(seen)
@@ -475,10 +524,13 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
     start = time.time()
     client = make_client()
     market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
-    notify = SEEN_FILE.exists()
     seen = load_seen()
+    notify = seen is not None
     if not notify:
+        seen = {}
         log.info("Premier lancement : les annonces déjà en ligne sont mémorisées sans être envoyées")
+    failures = 0          # passages d'affilée où aucune recherche n'a abouti
+    alert_after = max(1, 60 // cfg.get("intervalle_minutes", 10))  # environ 1 h
     while True:
         ok = 0
         try:
@@ -488,6 +540,18 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
             log.exception("Erreur inattendue : %s", e)
             client = make_client()
             market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
+        # Prévient sur Telegram si le bot ne joint plus Leboncoin (proxy à court de crédit,
+        # blocage...), puis quand ça repart
+        if ok == 0:
+            failures += 1
+            if failures == alert_after:
+                tg.send("⚠️ <b>Le bot n'arrive plus à joindre Leboncoin depuis environ 1 h.</b>\n"
+                        "Vérifie ton crédit de proxy (DataImpulse). Le bot continue d'essayer "
+                        "et te préviendra quand ça repart.")
+        else:
+            if failures >= alert_after:
+                tg.send("✅ Le bot joint de nouveau Leboncoin, la surveillance reprend.")
+            failures = 0
         # Rapport du marché, une fois par jour dès l'heure choisie. La date du dernier envoi
         # est gardée avec les annonces vues, pour survivre aux redémarrages (GitHub Actions).
         now = datetime.now(PARIS)
