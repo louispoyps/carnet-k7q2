@@ -18,11 +18,16 @@ Toutes les 10 min, pour chaque console de ta grille (`produits:` dans `config.ya
 Chaque matin à 8h, il envoie aussi le **prix du marché** de chaque console.
 
 ## Où il tourne
-Sur **GitHub Actions** (gratuit, dépôt public) : toutes les 10 min, 24h/24.
-Leboncoin bloque les serveurs de GitHub, donc le bot passe par un **proxy résidentiel DataImpulse**.
-Le token Telegram, le chat_id et le proxy sont dans les **Secrets** du dépôt (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `PROXY_URL`), invisibles même en public.
-Suivi des passages : onglet **Actions** du dépôt.
-Ne lance pas le bot sur ton PC en même temps, sinon tu recevras tout en double.
+Sur un **VPS** : toutes les 5 min, 24h/24, comme service `bot-consoles` (démarre tout seul, redémarre après une coupure).
+Leboncoin bloque les serveurs, donc le bot passe par un **proxy résidentiel**.
+Le token Telegram, le chat_id et le proxy sont dans `~/bot/bot.env` sur le serveur, jamais dans ce dépôt.
+Le lancement automatique sur GitHub est désactivé : ce dépôt sert seulement de sauvegarde du code.
+Ne lance pas le bot ailleurs en même temps, sinon tu recevras tout en double.
+
+Sur le serveur :
+- `systemctl status bot-consoles` : le bot tourne-t-il ?
+- `tail -f ~/bot/bot.log` : voir ce qu'il fait en direct (Ctrl+C pour quitter)
+- `sudo systemctl restart bot-consoles` : le redémarrer
 
 ## Modifier la grille
 Dans `config.yaml`, section `produits:` :
@@ -31,7 +36,7 @@ Dans `config.yaml`, section `produits:` :
 - `prix_min` : en dessous, ce n'est jamais une vraie console (accessoires, arnaques).
 - `actif: false` : met une console en pause.
 
-Après une modification, envoie-la sur GitHub : le passage suivant l'utilise.
+Après une modification, copie `config.yaml` sur le serveur puis redémarre le bot.
 
 ## Commandes (sur ton PC)
 | Commande | Effet |

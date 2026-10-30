@@ -9,7 +9,7 @@ telegram:
   chat_id: ""
 
 # Temps entre deux passages (minutes). Les consoles partent vite : 5 à 10 min.
-intervalle_minutes: 10
+intervalle_minutes: 5
 
 # Heure d'envoi du rapport quotidien des prix du marché (0-23). Mets null pour le couper.
 rapport_marche_heure: 8

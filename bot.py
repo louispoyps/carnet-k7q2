@@ -413,8 +413,13 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
     return ok
 
 
-def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = None) -> int:
-    """Boucle principale ; renvoie le nombre de recherches réussies au dernier passage."""
+def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = None,
+             max_minutes: float | None = None) -> int:
+    """Boucle principale ; renvoie le nombre de recherches réussies au dernier passage.
+
+    max_minutes : s'arrête avant cette durée (GitHub Actions coupe un job au bout de 6 h).
+    """
+    start = time.time()
     client = make_client()
     market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
     notify = SEEN_FILE.exists()
@@ -445,9 +450,12 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
         if status is not None:
             status.update(last_pass=now.strftime("%d/%m %H:%M"),
                           searches_ok=ok, searches_total=len(cfg["produits"]))
+        minutes = cfg.get("intervalle_minutes", 10)
         if once:
             return ok
-        minutes = cfg.get("intervalle_minutes", 10)
+        if max_minutes is not None and (time.time() - start) / 60 + minutes > max_minutes:
+            log.info("Durée maximale atteinte, arrêt (un nouveau passage prendra le relais)")
+            return ok
         log.info("Prochain passage dans %d min", minutes)
         time.sleep(minutes * 60)
 
