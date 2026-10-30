@@ -26,6 +26,7 @@ import re
 import statistics
 import sys
 import time
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -42,6 +43,7 @@ SEEN_FILE = BASE_DIR / "annonces_vues.json"
 
 PARIS = ZoneInfo("Europe/Paris")
 CATEGORY = lbc.Category.ELECTRONIQUE_CONSOLES
+OTHER_CATEGORY = lbc.Category.ELECTRONIQUE_JEUX_VIDEO
 
 sys.stdout.reconfigure(encoding="utf-8")
 logging.basicConfig(
@@ -112,6 +114,11 @@ def eur(value: float) -> str:
     return f"{value:,.0f} €".replace(",", " ")
 
 
+def plain(text: str) -> str:
+    """Texte sans accents ("série" -> "serie")."""
+    return "".join(ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn")
+
+
 def has_word(text: str, word: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text) is not None
 
@@ -161,14 +168,35 @@ def posted_at(ad: lbc.Ad) -> str:
     return max(ad.first_publication_date or "", getattr(ad, "index_date", None) or "")
 
 
-def search(client: lbc.Client, product: dict, cfg: dict, limit: int, **kwargs) -> list[lbc.Ad]:
-    """Annonces de consoles (pas d'accessoires) livrables pour ce produit."""
-    result = client.search(
+def search(client: lbc.Client, product: dict, cfg: dict, limit: int,
+           extra: bool = False, **kwargs) -> list[lbc.Ad]:
+    """Annonces de consoles (pas d'accessoires) livrables pour ce produit.
+
+    extra=True : cherche aussi par mot-clé dans « Jeux vidéo », où des vendeurs
+    rangent leur console par erreur."""
+    ads = client.search(
         category=CATEGORY, limit=limit,
         video_game_type=["console"], console_model=product["modeles"],
         shipping_type=cfg["modes_envoi"], **kwargs,
-    )
-    return result.ads
+    ).ads
+    if extra and product.get("mot_cle"):
+        try:
+            found = client.search(
+                text=product["mot_cle"], search_in_title_only=True, category=OTHER_CATEGORY,
+                limit=limit, shipping_type=cfg["modes_envoi"], **kwargs,
+            ).ads
+        except Exception as e:
+            log.warning("  recherche par mot-clé impossible (%s)", e)
+            found = []
+        ids = {ad.id for ad in ads}
+        ads += [ad for ad in found if ad.id not in ids]
+    return ads
+
+
+def misfiled(ad: lbc.Ad) -> bool:
+    """Annonce rangée hors de la catégorie Consoles (trouvée par mot-clé)."""
+    category = getattr(ad, "category_id", None)
+    return category is not None and str(category) != CATEGORY.value
 
 
 def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
@@ -181,12 +209,25 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
     first = re.sub(r"^[^\w]+", "", title).split(" ", 1)[0]
     if first in cfg.get("titre_debut_exclut", []):
         return f"accessoire (titre commence par « {first} »)"
+    if re.match(r"\W*lots?\s+(de\s+)?(\d+\s+)?(jeux|jeu|manettes?|accessoires|cartes?)(?!\w)", title):
+        return "lot de jeux ou d'accessoires"
     head = re.split(r"\+|\bavec\b|&|\bet\b", title, maxsplit=1)[0]
     for w in cfg.get("mots_accessoires", []):
         for m in re.finditer(r"(?<!\w)" + re.escape(w) + r"(?!\w)", head):
             # "2 jeux", "3 manettes", "1to de jeux" : c'est un lot avec la console
             if not BUNDLE_BEFORE.search(head[:m.start()]):
                 return f"accessoire seul (« {w} »)"
+    if misfiled(ad):
+        # Rangée dans « Jeux vidéo » : beaucoup de jeux et de collectors. Le début du
+        # titre (avant « + » / « avec ») ne doit parler que de la console.
+        # Le modèle saisi par le vendeur y est parfois faux : le titre fait foi
+        model = attr(ad, "console_model")
+        if model and model not in product["modeles"] and not has_word(plain(title), plain(product["mot_cle"])):
+            return f"autre modèle ({model})"
+        allowed = set(cfg.get("mots_titre_console", []))
+        others = [w for w in re.findall(r"[\w']+", head) if w not in allowed and not w.isdigit()]
+        if others:
+            return f"hors catégorie, pas une console seule (« {' '.join(others[:3])} »)"
     weight = to_int(attr(ad, "estimated_parcel_weight"))
     if 200 <= weight < product.get("poids_min_g", 0):  # < 200 g : poids non renseigné
         return f"colis trop léger pour la console ({weight} g)"
@@ -487,7 +528,7 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
         ads = None
         for attempt in range(3):
             try:
-                ads = search(client, product, cfg, limit=35, sort=lbc.Sort.NEWEST,
+                ads = search(client, product, cfg, limit=35, extra=True, sort=lbc.Sort.NEWEST,
                              price=[int(product.get("prix_min", 10)), max_price])
                 break
             except Exception as e:

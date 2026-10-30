@@ -129,6 +129,19 @@ mots_accessoires:
    "volant", "casque", "station de charge", "arcade", "fight stick", "panthera",
    "storage", "expansion", "carte d'extension", "carte d extension", "kinect", "headset"]
 
+# Consoles rangées par erreur dans « Jeux vidéo » : le début du titre (avant « + » / « avec »)
+# ne doit contenir QUE ces mots, sinon c'est un jeu, un collector, une manette...
+mots_titre_console:
+  [console, consoles, nintendo, switch, oled, ps5, playstation, sony, slim, standard, digital,
+   digitale, numérique, numerique, édition, edition, lecteur, disque, disc, cd, blu, ray, avec,
+   xbox, series, serie, série, séries, x, s, v1, v2, go, to, tb, 1to, 2to, 825go, 512go, 64go, 32go,
+   blanc, blanche, noir, noire, gris, grise, rouge, bleu, bleue, néon, neon, white, black,
+   neuf, neuve, neufs, comme, très, tres, bon, bonne, bel, état, etat, parfait, excellent,
+   impeccable, nickel, quasi, peu, servi, servie, utilisée, utilisee, occasion, garantie,
+   sous, complète, complete, complet, en, boîte, boite, carton, origine, d'origine, pack,
+   bundle, vends, vend, vente, à, a, de, du, la, le, les, une, un, et, pour, cause,
+   double, emploi, urgent, prix, négociable, negociable, the, model, modèle, modele, version]
+
 # Réparations ajoutées aux frais si la description contient ces mots
 frais_reparation:
   "drift": 25
@@ -169,6 +182,7 @@ mots_positifs:
 # ------------------------------------------------------------
 produits:
   - nom: "PS5"
+    mot_cle: "ps5"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["ps5", "ps5slim"]
     titre_exclut: ["ps5 pro", "portal", "playstation portal", "ps vr", "psvr"]
     prix_min: 150     # en dessous, ce n'est jamais une PS5 qui marche
@@ -177,6 +191,7 @@ produits:
     revente: [280, 350]
 
   - nom: "Switch OLED"
+    mot_cle: "switch oled"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["switcholed"]
     titre_exclut: ["switch 2", "switch2", "lite"]
     prix_min: 90
@@ -184,6 +199,7 @@ produits:
     revente: [240, 290]
 
   - nom: "Switch classique"
+    mot_cle: "switch"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["switch"]
     titre_exclut: ["oled", "lite", "switch 2", "switch2"]
     prix_min: 40
@@ -192,6 +208,7 @@ produits:
 
   # Prix proposés d'après le marché du 29/10 (25 % les moins chères ≤ 390 €, médiane 480 €)
   - nom: "Switch 2"
+    mot_cle: "switch 2"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["switch2"]
     titre_exclut: ["switch 1", "oled", "lite"]
     prix_min: 200
@@ -200,8 +217,9 @@ produits:
 
   # Prix proposés d'après le marché du 30/10 (25 % les moins chères ≤ 450 €, médiane 525 €)
   - nom: "Xbox Series X"
+    mot_cle: "series x"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["xboxseriesx"]
-    titre_exclut: ["series s", "xbox one", "one x", "one s"]
+    titre_exclut: ["series s", "série s", "serie s", "xbox one", "one x", "one s"]
     prix_min: 200
     poids_min_g: 1500 # poids estimé par le vendeur, souvent faux ; manettes < 1 kg
     achat: [330, 380]
@@ -209,9 +227,10 @@ produits:
 
   # Prix proposés d'après le marché du 30/10 (25 % les moins chères ≤ 220 €, médiane 255 €)
   - nom: "Xbox Series S"
+    mot_cle: "series s"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     actif: false      # retirée à ta demande
     modeles: ["xboxseriess"]
-    titre_exclut: ["series x", "xbox one", "one x", "one s"]
+    titre_exclut: ["series x", "série x", "serie x", "xbox one", "one x", "one s"]
     prix_min: 80
     achat: [150, 180]
     revente: [210, 260]
