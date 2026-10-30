@@ -97,6 +97,7 @@ def has_word(text: str, word: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text) is not None
 
 
+BUNDLE_BEFORE = re.compile(r"(?<!\w)(\d+|un|une|deux|trois|quatre|cinq|de|des|plus|avec)\s*$")
 NEGATION_BEFORE = re.compile(r"(?<!\w)(pas|aucun|aucune|sans|jamais|ni|non|zéro|zero)(?!\w)")
 NEGATION_AFTER = re.compile(r"^\s*(pas|jamais|plus)(?!\w)")
 
@@ -157,8 +158,10 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
         return f"accessoire (titre commence par « {first} »)"
     head = re.split(r"\+|\bavec\b|&|\bet\b", title, maxsplit=1)[0]
     for w in cfg.get("mots_accessoires", []):
-        if has_word(head, w):
-            return f"accessoire seul (« {w} »)"
+        for m in re.finditer(r"(?<!\w)" + re.escape(w) + r"(?!\w)", head):
+            # "2 jeux", "3 manettes", "1to de jeux" : c'est un lot avec la console
+            if not BUNDLE_BEFORE.search(head[:m.start()]):
+                return f"accessoire seul (« {w} »)"
     weight = int(attr(ad, "estimated_parcel_weight") or 0)
     if 200 <= weight < product.get("poids_min_g", 0):  # < 200 g : poids non renseigné
         return f"colis trop léger pour la console ({weight} g)"
