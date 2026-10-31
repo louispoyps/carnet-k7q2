@@ -8,7 +8,8 @@ telegram:
   token: "COLLE_TON_TOKEN_ICI"
   chat_id: ""
 
-# Temps entre deux passages (minutes). Les consoles partent vite : 5 à 10 min.
+# Temps entre deux recherches (minutes), sauf pour les produits qui ont leur propre
+# « intervalle_minutes » plus bas (PS5 et Switch 2 : 3 min).
 intervalle_minutes: 10
 
 # Heure d'envoi du rapport quotidien des prix du marché (0-23). Mets null pour le couper.
@@ -185,6 +186,7 @@ mots_positifs:
 # ------------------------------------------------------------
 produits:
   - nom: "PS5"
+    intervalle_minutes: 3   # part vite et rapporte gros : vérifiée plus souvent
     mot_cle: "ps5"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["ps5", "ps5slim"]
     titre_exclut: ["ps5 pro", "portal", "psportal", "playstation portal", "ps vr", "psvr"]
@@ -211,6 +213,7 @@ produits:
 
   # Prix proposés d'après le marché du 29/10 (25 % les moins chères ≤ 390 €, médiane 480 €)
   - nom: "Switch 2"
+    intervalle_minutes: 3   # part vite et rapporte gros : vérifiée plus souvent
     mot_cle: "switch 2"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["switch2"]
     titre_exclut: ["switch 1", "oled", "lite"]

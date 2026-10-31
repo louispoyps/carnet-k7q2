@@ -623,16 +623,28 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
     if not notify:
         seen = {}
         log.info("Premier lancement : les annonces déjà en ligne sont mémorisées sans être envoyées")
+    # Chaque produit peut avoir son propre délai (PS5 toutes les 3 min, le reste toutes les 10)
+    default = cfg.get("intervalle_minutes", 10)
+    every = {p["nom"]: p.get("intervalle_minutes", default) for p in cfg["produits"]}
+    tick = min(every.values(), default=default)
+    last_search: dict[str, float] = {}
     failures = 0          # passages d'affilée où aucune recherche n'a abouti
-    alert_after = max(1, 60 // cfg.get("intervalle_minutes", 10))  # environ 1 h
+    alert_after = max(1, 60 // tick)  # environ 1 h
     degraded = False      # un échec a déjà été signalé, en attente d'un passage sans échec
     while True:
         ok = 0
         failed: list[str] = []
+        pass_start = time.time()
+        # Produits dont le délai est écoulé, à un demi-tour près : avec un tour de 3 min,
+        # un produit à 10 min passe au bout de 9 min plutôt que d'attendre 12 min
+        due = [p for p in cfg["produits"]
+               if pass_start - last_search.get(p["nom"], 0) >= (every[p["nom"]] - tick / 2) * 60]
+        for p in due:
+            last_search[p["nom"]] = pass_start
         # Connexion neuve à chaque passage : une connexion proxy coincée ne bloque plus des heures
         client = market.client = make_client()
         try:
-            ok = run_once(client, tg, cfg, seen, market, notify, failed)
+            ok = run_once(client, tg, dict(cfg, produits=due), seen, market, notify, failed)
             notify = True
         except Exception as e:
             log.exception("Erreur inattendue : %s", e)
@@ -671,15 +683,16 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
                 log.warning("Rapport du marché impossible : %s", e)
         if status is not None:
             status.update(last_pass=now.strftime("%d/%m %H:%M"),
-                          searches_ok=ok, searches_total=len(cfg["produits"]))
-        minutes = cfg.get("intervalle_minutes", 10)
+                          searches_ok=ok, searches_total=len(due))
         if once:
             return ok
-        if max_minutes is not None and (time.time() - start) / 60 + minutes > max_minutes:
+        if max_minutes is not None and (time.time() - start) / 60 + tick > max_minutes:
             log.info("Durée maximale atteinte, arrêt (un nouveau passage prendra le relais)")
             return ok
-        log.info("Prochain passage dans %d min", minutes)
-        time.sleep(minutes * 60)
+        # Le délai part du début du passage : un passage de 30 s ne décale pas le rythme
+        wait = max(10, tick * 60 - (time.time() - pass_start))
+        log.info("Prochain passage dans %d min %02d s", wait // 60, wait % 60)
+        time.sleep(wait)
 
 
 def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
