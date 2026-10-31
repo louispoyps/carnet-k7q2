@@ -53,9 +53,11 @@ vinted:
 # ------------------------------------------------------------
 #  Arnaques (Leboncoin et Vinted)
 # ------------------------------------------------------------
-# Alerte marquée 🚨 ARNAQUE PROBABLE si le titre ou la description parle de payer ou de
-# discuter en dehors du site (sauf si c'est nié : « pas de virement »).
-# Un numéro de téléphone ou une adresse mail dans l'annonce est aussi signalé.
+# Annonce JAMAIS envoyée si le titre ou la description parle de payer ou de discuter
+# en dehors du site (sauf si c'est nié : « pas de virement »).
+# Pareil s'il y a un numéro de téléphone ou une adresse mail dans l'annonce.
+# Sur Vinted, une annonce dont la description n'a pas pu être lue n'est pas envoyée
+# (réessayée au passage suivant).
 mots_arnaque:
   - "virement"
   - "paypal"

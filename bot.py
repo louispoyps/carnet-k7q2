@@ -393,6 +393,11 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     if reason:
         log.info("  ignorée (%s) : %s", reason, title_of(ad))
         return None
+    # Paiement ou contact hors du site (virement, PayPal, WhatsApp...) : jamais envoyée
+    scams = scam_words(ad, cfg)
+    if scams:
+        log.info("  ignorée (arnaque probable : %s) : %s", ", ".join(scams), title_of(ad))
+        return None
 
     text = f"{title_of(ad)} {ad.body or ''}".lower()
     good, warn = [], []
@@ -438,11 +443,6 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     if price < resale * rent.get("prix_suspect_pct", 55) / 100:
         warn.insert(0, "Prix anormalement bas : arnaque possible. Paie UNIQUEMENT via le "
                        f"paiement sécurisé {site}, jamais par virement ou en dehors du site")
-    scams = scam_words(ad, cfg)
-    if scams:
-        warn.insert(0, "🚨 ARNAQUE PROBABLE, l'annonce parle de : "
-                    + ", ".join(f"« {w} »" for w in scams)
-                    + f". Ne paie JAMAIS en dehors de {site} (virement, PayPal, WhatsApp...)")
 
     score, count = attr(ad, "rating_score"), attr(ad, "rating_count")
     if to_int(count) > 0:
@@ -466,8 +466,6 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     offer = min(offer, price)
     if problems:
         label = "🚨 À VÉRIFIER · " + label
-    if scams:
-        label = "🚨 ARNAQUE PROBABLE · " + label
 
     return {
         "label": label,
@@ -720,11 +718,10 @@ def run_vinted(vinted: Vinted, tg: Telegram, cfg: dict, seen: dict, market: Mark
                 # D'abord sur le titre et le prix ; la page (description, avis) seulement si ça vaut le coup
                 a = analyse(ad, product, market, cfg)
                 if a:
-                    try:
-                        vinted.details(ad)
-                        a = analyse(ad, product, market, cfg)
-                    except Exception as e:
-                        log.warning("  page Vinted illisible (%s) : alerte sans la description", e)
+                    # Description obligatoire : sans elle, impossible de vérifier qu'elle ne parle
+                    # pas de virement. Pas marquée comme vue : réessayée au prochain passage
+                    vinted.details(ad)
+                    a = analyse(ad, product, market, cfg)
             except Exception as e:
                 log.warning("  erreur d'analyse sur %s : %s", ad.url, e)
                 continue
