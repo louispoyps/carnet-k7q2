@@ -238,6 +238,34 @@ produits:
     achat: [150, 180]
     revente: [210, 260]
 
+  # Manette PS5 (DualSense) vendue seule. Marché du 31/10 : médiane 45 €, 25 % ≤ 35 €.
+  # Petit objet : port et frais plus faibles, marge minimum en euros plus petite.
+  - nom: "Manette PS5"
+    accessoire: true
+    modeles: ["ps5", "ps5slim"]
+    mot_cle: "manette ps5"
+    titre_requis: ["manette", "dualsense", "dual sense"]
+    titre_exclut: ["edge", "scuff", "lot", "lots", "manettes", "batterie", "coque", "skin",
+                   "station", "chargeur", "support", "câble", "cable", "grip", "grips", "housse",
+                   "ps4", "dualshock", "xbox", "switch", "compatible", "façade", "facade",
+                   "boîte vide", "boite vide", "joystick", "joysticks", "bouton", "boutons",
+                   "gâchette", "gachette", "volant", "casque", "en l'état", "en l etat",
+                   "ne marche", "ne fonctionne", "portal", "réparation", "reparation", "porte",
+                   "rangement", "téléphone", "telephone", "recharge", "pc", "filaire",
+                   "pour manette", "remotto", "télécommande", "telecommande",
+                   # Manettes non officielles : se revendent bien moins cher
+                   "pour ps5", "compatible ps5", "atrix", "subsonic", "battletron", "nacon",
+                   "bigben", "powera", "power a", "konix", "pdp", "hori", "gamesir", "turtle beach"]
+    prix_min: 10      # en dessous : batteries, coques, manettes HS
+    prix_marche: [10, 90]
+    achat: [20, 30]
+    revente: [40, 45]
+    rentabilite:
+      frais_achat_fixe: 5     # Mondial Relay petit colis + part fixe de la protection
+      marge_min: 8            # bénéfice minimum pour une manette
+      marge_min_pct: 0
+      revente_marche: mediane # revente au prix médian (45 €) plutôt qu'au plus bas (35 €)
+
   # PS4 classique et Slim. Prix proposés d'après le marché du 30/10 (25 % ≤ 85 €, médiane 115 €)
   - nom: "PS4"
     actif: false      # retirée : marges trop faibles

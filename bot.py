@@ -207,6 +207,10 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
     for w in cfg.get("titre_exclut", []) + product.get("titre_exclut", []):
         if has_word(title, w):
             return f"titre « {w} »"
+    if re.search(r"pour\s+pi[eè]ces?(?!\w)", title):
+        return "vendue pour pièces"
+    if product.get("accessoire"):
+        return accessory_rejection(ad, title, text, product, cfg)
     first = re.sub(r"^[^\w]+", "", title).split(" ", 1)[0]
     if first in cfg.get("titre_debut_exclut", []):
         return f"accessoire (titre commence par « {first} »)"
@@ -232,11 +236,16 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
     weight = to_int(attr(ad, "estimated_parcel_weight"))
     if 200 <= weight < product.get("poids_min_g", 0):  # < 200 g : poids non renseigné
         return f"colis trop léger pour la console ({weight} g)"
-    if ad.price and ad.price < product.get("prix_min", 0):
-        return f"prix trop bas pour une vraie console ({eur(ad.price)})"
     if attr(ad, "video_game_type") not in (None, "console"):
         return "pas une console"
-    if attr(ad, "condition") == "pourpieces" or re.search(r"pour\s+pi[eè]ces?(?!\w)", title):
+    return common_rejection(ad, text, product, cfg)
+
+
+def common_rejection(ad: lbc.Ad, text: str, product: dict, cfg: dict) -> str | None:
+    """Règles communes aux consoles et aux accessoires : état, prix, livraison."""
+    if ad.price and ad.price < product.get("prix_min", 0):
+        return f"prix trop bas ({eur(ad.price)})"
+    if attr(ad, "condition") == "pourpieces":
         return "vendue pour pièces"
     if attr(ad, "shippable") != "true":
         return "pas de livraison"
@@ -244,6 +253,18 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
         if w in text:
             return f"main propre uniquement (« {w} »)"
     return None
+
+
+def accessory_rejection(ad: lbc.Ad, title: str, text: str, product: dict, cfg: dict) -> str | None:
+    """Accessoire vendu seul (manette) : le titre doit le nommer, et ce n'est pas une console."""
+    if not any(has_word(title, w) for w in product.get("titre_requis", [])):
+        return "pas une manette"
+    model = attr(ad, "console_model")
+    if model and model not in product["modeles"]:
+        return f"autre modèle ({model})"
+    if attr(ad, "video_game_type") not in (None, "accessoires"):
+        return "pas un accessoire seul"
+    return common_rejection(ad, text, product, cfg)
 
 
 def problem_words(ad: lbc.Ad, cfg: dict) -> list[str]:
@@ -283,7 +304,8 @@ class MarketPrice:
         if name not in self.cache or time.time() - self.cache[name][0] > self.ttl:
             ads = []
             for page in range(1, cfg["rentabilite"].get("pages_marche", 3) + 1):
-                batch = search(self.client, product, cfg, limit=100, page=page)
+                extra = {"price": product["prix_marche"]} if product.get("prix_marche") else {}
+                batch = search(self.client, product, cfg, limit=100, page=page, **extra)
                 ads += batch
                 if len(batch) < 100:
                     break
@@ -309,6 +331,18 @@ class MarketPrice:
 
 # ----------------------------------------------------------------- analyse
 
+def rent_for(product: dict, cfg: dict) -> dict:
+    """Réglages de rentabilité, avec ceux propres au produit (manettes : port et marge plus petits)."""
+    return {**cfg["rentabilite"], **(product.get("rentabilite") or {})}
+
+
+def resale_for(live: float, quick: float, product: dict, rent: dict) -> float:
+    """Prix de revente estimé : vente rapide (ou médiane si demandé), plafonné par ta grille."""
+    base = live if rent.get("revente_marche") == "mediane" else quick
+    low, high = product["revente"]
+    return min(base, (low + high) / 2) if rent.get("prudent", True) else base
+
+
 def costs_for(price: float, rent: dict) -> float:
     return rent["frais_achat_fixe"] + price * rent["frais_achat_pct"] / 100
 
@@ -326,7 +360,7 @@ def max_buy_for(net_resale: float, margin: float, rent: dict, repair_cost: float
 
 def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict | None:
     """Calcule la rentabilité ; renvoie l'analyse si l'affaire vaut le coup, sinon None."""
-    rent = cfg["rentabilite"]
+    rent = rent_for(product, cfg)
     price = ad.price
     if not price:
         return None
@@ -345,7 +379,7 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     problems = problem_words(ad, cfg)
     if problems:
         warn.insert(0, "🚨 L'annonce mentionne : " + ", ".join(f"« {w} »" for w in problems)
-                    + " — lis la description et demande au vendeur si la console marche")
+                    + " — lis la description et demande au vendeur si ça marche")
     if attr(ad, "condition") == "etatsatisfaisant":
         warn.append("État satisfaisant (traces d'usure)")
 
@@ -360,7 +394,7 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
             market_note = f"⬆️ plus haut que ta revente prévue ({eur(low)}–{eur(high)})"
         else:
             market_note = f"✔ conforme à ta revente prévue ({eur(low)}–{eur(high)})"
-        resale = min(quick, mid) if rent.get("prudent", True) else quick
+        resale = resale_for(live, quick, product, rent)
     else:
         market_note = f"pas assez d'annonces ({n}), estimation via ta grille"
         resale = mid
@@ -468,7 +502,7 @@ class Telegram:
 
 def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
     e = html.escape
-    rent = cfg["rentabilite"]
+    rent = rent_for(product, cfg)
     details = " · ".join(filter(None, [
         attr_label(ad, "console_model"),
         attr_label(ad, "condition"),
@@ -522,9 +556,9 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
     since = min(now.strftime("%Y-%m-%d 00:00:00"),
                 (now - timedelta(minutes=3 * cfg.get("intervalle_minutes", 10)))
                 .strftime("%Y-%m-%d %H:%M:%S"))
-    rent = cfg["rentabilite"]
     ok = 0
     for product in cfg["produits"]:
+        rent = rent_for(product, cfg)
         max_price = int(product["achat"][1] * (1 + rent["marge_negociation_achat_pct"] / 100))
         log.info("Recherche : %s (jusqu'à %s)", product["nom"], eur(max_price))
         ads = None
@@ -650,11 +684,11 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
 
 def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
     """Prix du marché actuel de chaque console comparé à ta grille."""
-    rent = cfg["rentabilite"]
     market = MarketPrice(client, 0)
     day = datetime.now(PARIS).strftime("%d/%m")
     lines = [f"<b>☀️ Prix du marché du {day}</b> (consoles livrables, toute la France)", ""]
     for product in cfg["produits"]:
+        rent = rent_for(product, cfg)
         prices = market.prices(product, cfg)
         name = html.escape(product["nom"])
         if len(prices) < 5:
@@ -664,7 +698,7 @@ def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
         quick = prices[len(prices) // 4]
         low, high = product["revente"]
         # Même calcul que pour les alertes : revente rapide, prudente, marge minimum
-        resale = min(quick, (low + high) / 2) if rent.get("prudent", True) else quick
+        resale = resale_for(med, quick, product, rent)
         net = resale * (1 - rent["negociation_revente_pct"] / 100)
         max_buy = min(max_buy_for(net, margin_for(resale, rent), rent), product["achat"][1])
         verdict = "✔ conforme" if low * 0.9 <= quick <= high * 1.1 else (
