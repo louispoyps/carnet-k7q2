@@ -1,5 +1,5 @@
 """
-Bot achat-revente de consoles Leboncoin -> Telegram.
+Bot achat-revente de consoles Leboncoin (et Vinted) -> Telegram.
 
 Pour chaque console de ta grille (config.yaml), le bot :
   - cherche les nouvelles annonces du jour, avec livraison, à prix bas,
@@ -29,6 +29,7 @@ import time
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -207,6 +208,11 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
     for w in cfg.get("titre_exclut", []) + product.get("titre_exclut", []):
         if has_word(title, w):
             return f"titre « {w} »"
+    # Vinted ne filtre ni la catégorie ni le modèle : le titre doit nommer la console
+    wanted = product.get("vinted_titre")
+    if getattr(ad, "site", None) == "Vinted" and wanted \
+            and not any(has_word(plain(title), plain(w)) for w in wanted):
+        return "pas ce modèle"
     if re.search(r"pour\s+pi[eè]ces?(?!\w)", title):
         return "vendue pour pièces"
     if product.get("accessoire"):
@@ -223,8 +229,10 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
             if not BUNDLE_BEFORE.search(head[:m.start()]):
                 return f"accessoire seul (« {w} »)"
     if misfiled(ad):
-        # Rangée dans « Jeux vidéo » : beaucoup de jeux et de collectors. Le début du
-        # titre (avant « + » / « avec ») ne doit parler que de la console.
+        # Rangée dans « Jeux vidéo » (ou trouvée sur Vinted, sans catégorie) : beaucoup de jeux
+        # et de collectors. Le début du titre (avant « + » / « avec » / « sans ») ne doit
+        # parler que de la console.
+        head = re.split(r"\bsans\b", head, maxsplit=1)[0]
         # Le modèle saisi par le vendeur y est parfois faux : le titre fait foi
         model = attr(ad, "console_model")
         if model and model not in product["modeles"] and not has_word(plain(title), plain(product["mot_cle"])):
@@ -273,9 +281,26 @@ def problem_words(ad: lbc.Ad, cfg: dict) -> list[str]:
     return [w for w in cfg.get("mots_a_verifier", []) if mentions(text, w)]
 
 
+SCAM_CONTACT = re.compile(r"(?:\+33|0033|(?<!\d)0)\s*[67](?:[\s.\-]*\d{2}){4}(?!\d)"  # 06 12 34 56 78
+                          r"|[\w.\-]+@[\w\-]+\.[a-z]{2,}"                            # adresse mail
+                          r"|wa\.me/")
+
+
+def scam_words(ad: lbc.Ad, cfg: dict) -> list[str]:
+    """Signes d'arnaque (paiement ou contact hors du site) : virement, WhatsApp, numéro..."""
+    text = f"{title_of(ad)} {ad.body or ''}".lower()
+    found = [w for w in cfg.get("mots_arnaque", []) if mentions(text, w)]
+    if SCAM_CONTACT.search(text):
+        found.append("numéro ou mail pour le contacter")
+    return found
+
+
 def fingerprint(ad: lbc.Ad) -> str:
     """Empreinte de l'annonce, pour reconnaître une annonce republiée sous un autre numéro."""
     title = re.sub(r"\W+", " ", title_of(ad).lower()).strip()
+    if getattr(ad, "site", None) == "Vinted":
+        # Pas de code postal sur Vinted : le vendeur fait la différence entre deux « PS5 »
+        return f"fp:vinted:{ad.seller}|{title}"
     return f"fp:{title}|{ad.location.zipcode}|{attr(ad, 'console_model')}"
 
 
@@ -409,14 +434,22 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
         log.info("  trop cher %s (max %s) : %s", eur(price), eur(max_buy), title_of(ad))
         return None
 
+    site = getattr(ad, "site", "Leboncoin")
     if price < resale * rent.get("prix_suspect_pct", 55) / 100:
         warn.insert(0, "Prix anormalement bas : arnaque possible. Paie UNIQUEMENT via le "
-                       "paiement sécurisé Leboncoin, jamais par virement ou en dehors du site")
+                       f"paiement sécurisé {site}, jamais par virement ou en dehors du site")
+    scams = scam_words(ad, cfg)
+    if scams:
+        warn.insert(0, "🚨 ARNAQUE PROBABLE, l'annonce parle de : "
+                    + ", ".join(f"« {w} »" for w in scams)
+                    + f". Ne paie JAMAIS en dehors de {site} (virement, PayPal, WhatsApp...)")
 
     score, count = attr(ad, "rating_score"), attr(ad, "rating_count")
     if to_int(count) > 0:
         stars = float(score or 0) * 5
         (good if stars >= 4.5 else warn).append(f"Vendeur noté {stars:.1f}/5 ({count} avis)")
+    elif count is None and site == "Vinted":
+        warn.append("Avis du vendeur non lus (page Vinted injoignable)")
     else:
         warn.append("Vendeur sans avis")
 
@@ -433,6 +466,8 @@ def analyse(ad: lbc.Ad, product: dict, market: MarketPrice, cfg: dict) -> dict |
     offer = min(offer, price)
     if problems:
         label = "🚨 À VÉRIFIER · " + label
+    if scams:
+        label = "🚨 ARNAQUE PROBABLE · " + label
 
     return {
         "label": label,
@@ -514,11 +549,15 @@ def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
                   f"({a['count']} annonces) {a['market_note']}")
     else:
         market = f"📊 Marché : {a['market_note']}"
+    site = getattr(ad, "site", None)
     lines = [
-        f"<b>{a['label']} · {e(product['nom'])}</b>",
+        f"<b>{a['label']} · {e(product['nom'])}</b>" + (f" · 🟢 <b>{site}</b>" if site else ""),
         f"🎮 {e(title_of(ad))}",
         f"📋 {e(details)}",
-        f"📍 {e(ad.location.city or '')} ({e(ad.location.zipcode or '')})",
+    ]
+    if ad.location.city or ad.location.zipcode:
+        lines.append(f"📍 {e(ad.location.city or '')} ({e(ad.location.zipcode or '')})")
+    lines += [
         "",
         f"💶 Prix : <b>{eur(ad.price)}</b>  (ton achat {eur(product['achat'][0])}–"
         f"{eur(product['achat'][1])}, max {eur(a['max_buy'])})",
@@ -538,6 +577,166 @@ def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
     lines += [f"⚠️ {e(w)}" for w in a["warn"]]
     lines += ["", f'<a href="{ad.url}">Voir l\'annonce</a>']
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------- vinted
+
+# État affiché par Vinted -> code Leboncoin (même traitement : « satisfaisant » signalé)
+VINTED_CONDITIONS = {"neuf avec étiquette": "neuf", "neuf sans étiquette": "neuf",
+                     "très bon état": "tresbonetat", "bon état": "bonetat",
+                     "satisfaisant": "etatsatisfaisant"}
+
+
+def vinted_ad(item: dict) -> SimpleNamespace:
+    """Annonce Vinted présentée comme une annonce Leboncoin, pour réutiliser filtres et analyse."""
+    condition = (item.get("item_box", {}).get("second_line") or "").split("·")[-1].strip()
+    attrs = {"condition": (VINTED_CONDITIONS.get(condition.lower()), condition or None),
+             "shippable": ("true", None), "shipping_type": ("Vinted", None)}
+    photo = item.get("photo") or {}
+    return SimpleNamespace(
+        site="Vinted", id=f"v{item['id']}", seller=(item.get("user") or {}).get("id"),
+        subject=item.get("title") or "", body="", price=float(item["price"]["amount"]),
+        url="https://www.vinted.fr" + item["url"] if item["url"].startswith("/") else item["url"],
+        images=[photo["url"]] if photo.get("url") else [], category_id="vinted",
+        location=SimpleNamespace(city="", zipcode=""),
+        attributes={k: SimpleNamespace(value=v, value_label=lab) for k, (v, lab) in attrs.items()},
+    )
+
+
+class Vinted:
+    """Recherche Vinted via le proxy. Le jeton de session (valable 24 h) est gardé entre les passages."""
+
+    HOME = "https://www.vinted.fr/how_it_works"
+    API = "https://api.vinted.fr/svc-catalogue/items"
+
+    def __init__(self):
+        self.session = None
+        self.since = 0.0
+
+    def reset(self) -> None:
+        self.session = None
+
+    def _session(self) -> requests.Session:
+        if self.session is None or time.time() - self.since > 20 * 3600:
+            url = os.environ.get("PROXY_URL")
+            s = requests.Session(impersonate="chrome", timeout=30,
+                                 proxies={"http": url, "https": url} if url else None)
+            s.get(self.HOME).raise_for_status()
+            if not s.cookies.get("access_token_web"):
+                raise RuntimeError("Vinted n'a pas donné de jeton de session")
+            self.session, self.since = s, time.time()
+        return self.session
+
+    def search(self, text: str, price_min: int, price_max: int, per_page: int,
+               page: int = 1) -> list[SimpleNamespace]:
+        s = self._session()
+        r = s.get(self.API, params={"search_text": text, "order": "newest_first",
+                                    "price_from": price_min, "price_to": price_max,
+                                    "per_page": per_page, "page": page},
+                  headers={"Accept": "application/json", "Origin": "https://www.vinted.fr",
+                           "Referer": "https://www.vinted.fr/",
+                           "Authorization": f"Bearer {s.cookies.get('access_token_web')}"})
+        if r.status_code in (401, 403):
+            self.reset()  # jeton expiré ou refusé : nouvelle session au prochain essai
+        r.raise_for_status()
+        return [vinted_ad(item) for item in r.json().get("items", [])]
+
+    def details(self, ad: SimpleNamespace) -> None:
+        """Lit la page de l'annonce (lourde : seulement pour les alertes) : description et avis."""
+        page = self._session().get(ad.url)
+        page.raise_for_status()
+        # Les données de la page sont du JSON rangé dans une chaîne : on retire un niveau d'échappement
+        text = page.text.replace("\\\\", "\0").replace('\\"', '"').replace("\0", "\\")
+
+        def field(key: str) -> str | None:
+            m = re.search(r'"%s":("(?:[^"\\]|\\.)*"|[\d.]+)' % key, text)
+            return json.loads(m.group(1)) if m else None
+
+        ad.body = str(field("description") or "")
+        count = field("feedback_count")
+        if count is not None:
+            ad.attributes["rating_count"] = SimpleNamespace(value=str(count), value_label=None)
+            ad.attributes["rating_score"] = SimpleNamespace(
+                value=str(field("feedback_reputation") or 0), value_label=None)
+
+
+def vinted_product(product: dict, cfg: dict) -> dict:
+    """Le produit avec les frais d'achat Vinted (protection acheteur + port) à la place de ceux de Leboncoin."""
+    v = cfg["vinted"]
+    port = v["port_accessoire"] if product.get("accessoire") else v["port"]
+    return dict(product, rentabilite={**(product.get("rentabilite") or {}),
+                                      "frais_achat_fixe": v["frais_fixe"] + port,
+                                      "frais_achat_pct": v["frais_pct"]})
+
+
+def run_vinted(vinted: Vinted, tg: Telegram, cfg: dict, seen: dict, market: MarketPrice,
+               failed: list | None = None) -> None:
+    """Même travail que run_once, sur Vinted. Pas de date sur Vinted : les annonces sont triées
+    des plus récentes aux plus anciennes, et le bot retient celles qu'il a déjà vues."""
+    per_page = cfg["vinted"].get("annonces_par_recherche", 24)
+    for product in cfg["produits"]:
+        if not product.get("mot_cle"):
+            continue
+        product = vinted_product(product, cfg)
+        rent = rent_for(product, cfg)
+        max_price = int(product["achat"][1] * (1 + rent["marge_negociation_achat_pct"] / 100))
+        log.info("Recherche Vinted : %s (jusqu'à %s)", product["nom"], eur(max_price))
+        ads = None
+        for attempt in range(3):
+            try:
+                ads = vinted.search(product["mot_cle"], int(product.get("prix_min", 10)),
+                                    max_price, per_page)
+                break
+            except Exception as e:
+                log.error("Échec de la recherche Vinted, essai %d/3 (%s)", attempt + 1, e)
+                vinted.reset()
+                time.sleep(5)
+        if ads is None:
+            if failed is not None:
+                failed.append(product["nom"] + " (Vinted)")
+            continue
+        new_ads = [ad for ad in ads if not already_seen(ad, seen)]
+        # Tout est nouveau : il y en a peut-être d'autres sur la page suivante
+        if ads and len(new_ads) == len(ads) == per_page and f"_vinted:{product['nom']}" in seen:
+            try:
+                more = vinted.search(product["mot_cle"], int(product.get("prix_min", 10)),
+                                     max_price, per_page, page=2)
+                new_ads += [ad for ad in more if not already_seen(ad, seen)]
+            except Exception as e:
+                log.warning("  page 2 Vinted impossible (%s)", e)
+        log.info("  %d annonces Vinted, %d nouvelles", len(ads), len(new_ads))
+        # Premier passage de ce produit sur Vinted : les annonces déjà en ligne sont
+        # mémorisées sans être envoyées
+        if f"_vinted:{product['nom']}" not in seen:
+            for ad in new_ads:
+                mark_seen(ad, seen)
+            seen[f"_vinted:{product['nom']}"] = datetime.now().isoformat()
+            save_seen(seen)
+            continue
+        for ad in new_ads:
+            if already_seen(ad, seen):
+                continue
+            try:
+                # D'abord sur le titre et le prix ; la page (description, avis) seulement si ça vaut le coup
+                a = analyse(ad, product, market, cfg)
+                if a:
+                    try:
+                        vinted.details(ad)
+                        a = analyse(ad, product, market, cfg)
+                    except Exception as e:
+                        log.warning("  page Vinted illisible (%s) : alerte sans la description", e)
+            except Exception as e:
+                log.warning("  erreur d'analyse sur %s : %s", ad.url, e)
+                continue
+            if a:
+                log.info("  %s %+.0f € : %s", a["label"], a["profit"], title_of(ad))
+                if not tg.send(format_message(ad, a, product, cfg),
+                               ad.images[0] if ad.images else None):
+                    continue
+            mark_seen(ad, seen)
+            save_seen(seen)
+        time.sleep(3)
+    save_seen(seen)
 
 
 # ------------------------------------------------------------------- boucle
@@ -618,6 +817,7 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
     start = time.time()
     client = make_client()
     market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
+    vinted = Vinted() if (cfg.get("vinted") or {}).get("actif") else None
     seen = load_seen()
     notify = seen is not None
     if not notify:
@@ -651,6 +851,13 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
             failed = ["toutes les consoles"]
             client = make_client()
             market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
+        if vinted and notify:
+            try:
+                run_vinted(vinted, tg, dict(cfg, produits=due), seen, market, failed)
+            except Exception as e:
+                log.exception("Erreur inattendue sur Vinted : %s", e)
+                failed.append("Vinted")
+                vinted.reset()
         # Prévient sur Telegram au premier échec (une seule fois, pas à chaque passage),
         # puis après ~1 h de panne complète (proxy à court de crédit, blocage...), puis quand ça repart
         if failed and not degraded:
