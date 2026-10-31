@@ -174,9 +174,10 @@ def search(client: lbc.Client, product: dict, cfg: dict, limit: int,
 
     extra=True : cherche aussi par mot-clé dans « Jeux vidéo », où des vendeurs
     rangent leur console par erreur."""
+    # Pas de filtre « type = console » : des vendeurs ne le remplissent pas.
+    # Les manettes et accessoires sont écartés ensuite par rejection().
     ads = client.search(
-        category=CATEGORY, limit=limit,
-        video_game_type=["console"], console_model=product["modeles"],
+        category=CATEGORY, limit=limit, console_model=product["modeles"],
         shipping_type=cfg["modes_envoi"], **kwargs,
     ).ads
     if extra and product.get("mot_cle"):
@@ -235,7 +236,7 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
         return f"prix trop bas pour une vraie console ({eur(ad.price)})"
     if attr(ad, "video_game_type") not in (None, "console"):
         return "pas une console"
-    if attr(ad, "condition") == "pourpieces":
+    if attr(ad, "condition") == "pourpieces" or re.search(r"pour\s+pi[eè]ces?(?!\w)", title):
         return "vendue pour pièces"
     if attr(ad, "shippable") != "true":
         return "pas de livraison"

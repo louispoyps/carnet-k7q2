@@ -62,7 +62,7 @@ mots_main_propre:
 # ------------------------------------------------------------
 # L'annonce est quand même envoyée, avec un avertissement 🚨 si le titre ou la
 # description contient un de ces mots (sauf s'il est nié : "ne surchauffe pas").
-# Les annonces marquées "Pour pièces" par le vendeur restent ignorées.
+# Les annonces marquées "Pour pièces" par le vendeur (ou "pour pièces" dans le titre) restent ignorées.
 mots_a_verifier:
   - "hs"
   - "ne marche pas"
@@ -107,6 +107,9 @@ mots_a_verifier:
 titre_exclut:
   - "recherche"
   - "cherche"
+  - "chercher"
+  - "cherches"
+  - "recherché"
   - "achète"
   - "achete"
   - "échange uniquement"
@@ -184,7 +187,7 @@ produits:
   - nom: "PS5"
     mot_cle: "ps5"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     modeles: ["ps5", "ps5slim"]
-    titre_exclut: ["ps5 pro", "portal", "playstation portal", "ps vr", "psvr"]
+    titre_exclut: ["ps5 pro", "portal", "psportal", "playstation portal", "ps vr", "psvr"]
     prix_min: 150     # en dessous, ce n'est jamais une PS5 qui marche
     poids_min_g: 1500 # poids estimé par le vendeur, souvent faux (2 kg pour une PS5) ; manettes < 1 kg
     achat: [200, 230]
