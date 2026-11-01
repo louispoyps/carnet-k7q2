@@ -168,8 +168,12 @@ def make_client() -> lbc.Client:
     if u.hostname == "gw.dataimpulse.com" and port == 823:
         port = random.randint(10000, 19999)
     # Identifiants laissés encodés (%40...) : curl les décode lui-même
-    return lbc.Client(proxy=lbc.Proxy(host=u.hostname, port=port, username=u.username,
-                                      password=u.password, scheme=u.scheme))
+    client = lbc.Client(proxy=lbc.Proxy(host=u.hostname, port=port, username=u.username,
+                                        password=u.password, scheme=u.scheme))
+    # Après une pause, la 1re connexion via l'IP fixe échoue souvent au bout de 15-25 s
+    # (le réessai passe aussitôt) : on abandonne plus tôt. Une recherche normale prend < 3 s.
+    client.timeout = 15
+    return client
 
 
 def posted_at(ad: lbc.Ad) -> str:
@@ -779,9 +783,9 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
                         client = market.client = make_client()
                     except Exception as e2:
                         log.error("  nouvelle connexion impossible (%s)", e2)
-                # Coupure réseau (connexion fermée par le proxy) : on garde la connexion et
-                # son cookie, curl la rouvre tout seul
-                time.sleep(5)
+                    time.sleep(5)
+                # Coupure réseau (fréquente au 1er essai après une pause) : on garde la connexion
+                # et son cookie, et on réessaie tout de suite (ça passe presque toujours)
         if ads is None:
             if failed is not None:
                 failed.append(product["nom"])
@@ -817,6 +821,17 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
         time.sleep(3)
     save_seen(seen)
     return ok
+
+
+def wake(client: lbc.Client) -> None:
+    """Mini-recherche (1 annonce) pour rouvrir la connexion au proxy avant un passage."""
+    for attempt in range(2):
+        try:
+            client.search(category=CATEGORY, limit=1)
+            return
+        except Exception as e:
+            if attempt:
+                log.info("  réveil de la connexion raté (%s)", e)
 
 
 def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = None,
@@ -911,7 +926,15 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
         # Le délai part du début du passage : un passage de 30 s ne décale pas le rythme
         wait = max(10, tick * 60 - (time.time() - pass_start))
         log.info("Prochain passage dans %d min %02d s", wait // 60, wait % 60)
-        time.sleep(wait)
+        if os.environ.get("PROXY_URL") and wait > 45:
+            # Après une pause, la 1re requête via le proxy échoue (15 s perdues) : on réveille
+            # la connexion 30 s avant le passage, pour que la vraie recherche parte aussitôt
+            time.sleep(wait - 30)
+            woke = time.time()
+            wake(market.client)
+            time.sleep(max(0, 30 - (time.time() - woke)))
+        else:
+            time.sleep(wait)
 
 
 def market_report(client: lbc.Client, tg: Telegram, cfg: dict) -> None:
