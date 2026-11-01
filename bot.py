@@ -22,6 +22,7 @@ import json
 import logging
 import logging.handlers
 import os
+import random
 import re
 import statistics
 import sys
@@ -36,6 +37,7 @@ from zoneinfo import ZoneInfo
 import lbc
 import yaml
 from curl_cffi import requests
+from lbc.exceptions import DatadomeError
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "config.yaml"
@@ -159,8 +161,14 @@ def make_client() -> lbc.Client:
     if not url:
         return lbc.Client()
     u = urlsplit(url)
+    port = u.port
+    # DataImpulse, port 823 : nouvelle IP à chaque connexion. Le cookie DataDome est lié à l'IP :
+    # dès que le proxy rouvre la connexion (entre deux passages), Leboncoin bloque. Les ports
+    # 10000-20000 gardent la même IP 30 min : un port tiré au hasard par connexion.
+    if u.hostname == "gw.dataimpulse.com" and port == 823:
+        port = random.randint(10000, 19999)
     # Identifiants laissés encodés (%40...) : curl les décode lui-même
-    return lbc.Client(proxy=lbc.Proxy(host=u.hostname, port=u.port, username=u.username,
+    return lbc.Client(proxy=lbc.Proxy(host=u.hostname, port=port, username=u.username,
                                       password=u.password, scheme=u.scheme))
 
 
@@ -765,8 +773,14 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
                 break
             except Exception as e:
                 log.error("Échec de la recherche, essai %d/3 (%s)", attempt + 1, e)
-                # Nouvelle connexion = nouvelle IP du proxy ; souvent suffisant
-                client = market.client = make_client()
+                if isinstance(e, DatadomeError):
+                    # Bloqué par DataDome : nouvelle connexion, nouvelle IP
+                    try:
+                        client = market.client = make_client()
+                    except Exception as e2:
+                        log.error("  nouvelle connexion impossible (%s)", e2)
+                # Coupure réseau (connexion fermée par le proxy) : on garde la connexion et
+                # son cookie, curl la rouvre tout seul
                 time.sleep(5)
         if ads is None:
             if failed is not None:
