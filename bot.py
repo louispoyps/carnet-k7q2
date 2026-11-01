@@ -316,14 +316,24 @@ def fingerprint(ad: lbc.Ad) -> str:
     return f"fp:{title}|{ad.location.zipcode}|{attr(ad, 'console_model')}"
 
 
+def cross_key(ad: lbc.Ad) -> str:
+    """Même titre et même prix : la même console mise en vente sur Leboncoin et sur Vinted."""
+    title = re.sub(r"\W+", " ", title_of(ad).lower()).strip()
+    return f"fp:titre_prix:{title}|{round(float(ad.price or 0))}"
+
+
 def already_seen(ad: lbc.Ad, seen: dict) -> bool:
-    return str(ad.id) in seen or fingerprint(ad) in seen
+    if str(ad.id) in seen or fingerprint(ad) in seen:
+        return True
+    # Seulement sur 2 jours : deux « Nintendo switch » au même prix à un mois d'écart sont deux consoles
+    return seen.get(cross_key(ad), "") >= (datetime.now() - timedelta(days=2)).isoformat()
 
 
 def mark_seen(ad: lbc.Ad, seen: dict) -> None:
     now = datetime.now().isoformat()
     seen[str(ad.id)] = now
     seen[fingerprint(ad)] = now
+    seen[cross_key(ad)] = now
 
 
 # ------------------------------------------------------------- prix marché
