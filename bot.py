@@ -838,16 +838,17 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
                if pass_start - last_search.get(p["nom"], 0) >= (every[p["nom"]] - tick / 2) * 60]
         for p in due:
             last_search[p["nom"]] = pass_start
-        # Connexion neuve à chaque passage : une connexion proxy coincée ne bloque plus des heures
-        client = market.client = make_client()
+        # La connexion est gardée d'un passage à l'autre : DataDome refuse souvent la première
+        # recherche d'une connexion neuve (1 sur 4 la nuit), presque jamais les suivantes.
+        # run_once en crée une nouvelle (dans market.client) seulement quand une recherche échoue.
         try:
-            ok = run_once(client, tg, dict(cfg, produits=due), seen, market, notify, failed)
+            ok = run_once(market.client, tg, dict(cfg, produits=due), seen, market, notify, failed)
             notify = True
         except Exception as e:
             log.exception("Erreur inattendue : %s", e)
             failed = ["toutes les consoles"]
-            client = make_client()
-            market = MarketPrice(client, cfg["rentabilite"].get("cache_marche_minutes", 120))
+            market.client = make_client()
+        client = market.client
         if vinted and notify:
             try:
                 run_vinted(vinted, tg, dict(cfg, produits=due), seen, market, failed)
