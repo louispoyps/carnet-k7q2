@@ -801,10 +801,17 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
         max_price = int(product["achat"][1] * (1 + rent["marge_negociation_achat_pct"] / 100))
         log.info("Recherche : %s (jusqu'à %s)", product["nom"], eur(max_price))
         ads = None
+        # Peu d'annonces par recherche (moins de données proxy) : en cherchant toutes les minutes,
+        # les 12 dernières suffisent. Si elles sont toutes nouvelles (après une coupure, ou au
+        # 1er passage), on recharge les 35 dernières pour ne rien rater.
+        small = cfg.get("annonces_par_recherche", 35)
         for attempt in range(3):
             try:
-                ads = search(client, product, cfg, limit=35, extra=True, sort=lbc.Sort.NEWEST,
-                             price=[int(product.get("prix_min", 10)), max_price])
+                kwargs = dict(extra=True, sort=lbc.Sort.NEWEST,
+                              price=[int(product.get("prix_min", 10)), max_price])
+                ads = search(client, product, cfg, limit=small if notify else 35, **kwargs)
+                if notify and len(ads) >= small and not any(already_seen(ad, seen) for ad in ads):
+                    ads = search(client, product, cfg, limit=35, **kwargs)
                 break
             except Exception as e:
                 log.error("Échec de la recherche, essai %d/3 (%s)", attempt + 1, e)

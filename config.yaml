@@ -13,6 +13,10 @@ telegram:
 # pour arriver avant les autres acheteurs.
 intervalle_minutes: 1
 
+# Annonces lues par recherche Leboncoin (moins = moins de données proxy). Si elles sont
+# toutes nouvelles, le bot relit les 35 dernières pour ne rien rater.
+annonces_par_recherche: 12
+
 # Heure d'envoi du rapport quotidien des prix du marché (0-23). Mets null pour le couper.
 rapport_marche_heure: 8
 
@@ -44,7 +48,7 @@ rentabilite:
 # ------------------------------------------------------------
 vinted:
   actif: true
-  annonces_par_recherche: 24
+  annonces_par_recherche: 12
   # Frais payés par l'acheteur sur Vinted : protection 0,70 € + 5 % du prix, plus le port
   frais_fixe: 0.7
   frais_pct: 5
