@@ -536,23 +536,36 @@ class Telegram:
             return False
         return False
 
-    def send(self, text: str, photo: str | None = None) -> bool:
-        """Envoie le message ; renvoie False s'il n'a pas pu partir."""
+    def send(self, text: str, photo: str | None = None, buttons: list | None = None) -> bool:
+        """Envoie le message ; renvoie False s'il n'a pas pu partir.
+        buttons : [(texte, lien), ...], affichés en boutons sous le message."""
         if self.dry_run:
-            print("\n" + html.unescape(re.sub(r"<[^>]+>", "", text)) + "\n" + "-" * 60)
+            print("\n" + plain_text(text) + "\n" + "-" * 60)
             return True
-        if photo and len(text) <= 1024 and self._post("sendPhoto", {
-                "chat_id": self.chat_id, "photo": photo, "caption": text, "parse_mode": "HTML"}):
+        extra = {"chat_id": self.chat_id}
+        if buttons:
+            extra["reply_markup"] = json.dumps(
+                {"inline_keyboard": [[{"text": t, "url": u}] for t, u in buttons]})
+        if photo and len(plain_text(text)) <= 1024 and self._post("sendPhoto", dict(
+                extra, photo=photo, caption=text, parse_mode="HTML")):
             return True
         # Sans photo (photo refusée ou texte trop long pour une légende)
-        if self._post("sendMessage", {
-                "chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
-                "disable_web_page_preview": "true"}):
+        if self._post("sendMessage", dict(
+                extra, text=text, parse_mode="HTML", disable_web_page_preview="true")):
             return True
         # Dernier essai en texte simple, si c'est la mise en forme que Telegram refuse
-        return self._post("sendMessage", {
-            "chat_id": self.chat_id, "text": html.unescape(re.sub(r"<[^>]+>", "", text)),
-            "disable_web_page_preview": "true"})
+        return self._post("sendMessage", dict(
+            extra, text=plain_text(text), disable_web_page_preview="true"))
+
+
+def plain_text(text: str) -> str:
+    """Texte tel que Telegram l'affiche (sans les balises HTML)."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+
+def buy_buttons(ad: lbc.Ad) -> list:
+    site = getattr(ad, "site", "Leboncoin")
+    return [(f"🛒 Acheter sur {site}", ad.url)]
 
 
 def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
@@ -596,6 +609,14 @@ def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
     lines += [f"✅ {e(g)}" for g in a["good"]]
     lines += [f"⚠️ {e(w)}" for w in a["warn"]]
     lines += ["", f'<a href="{ad.url}">Voir l\'annonce</a>']
+    # Description du vendeur, pour juger soi-même. Raccourcie pour que le message tienne
+    # sous la photo (1024 caractères), mais jamais à moins de 300 caractères.
+    body = re.sub(r"\s*\n\s*", " / ", (ad.body or "").strip())
+    if body:
+        room = max(300, 1024 - len(plain_text("\n".join(lines))) - 20)
+        if len(body) > room:
+            body = body[:room - 1].rsplit(" ", 1)[0] + "…"
+        lines[-2:-2] = ["", f"📝 <i>{e(body)}</i>"]
     return "\n".join(lines)
 
 
@@ -750,7 +771,7 @@ def run_vinted(vinted: Vinted, tg: Telegram, cfg: dict, seen: dict, market: Mark
             if a:
                 log.info("  %s %+.0f € : %s", a["label"], a["profit"], title_of(ad))
                 if not tg.send(format_message(ad, a, product, cfg),
-                               ad.images[0] if ad.images else None):
+                               ad.images[0] if ad.images else None, buy_buttons(ad)):
                     continue
             mark_seen(ad, seen)
             save_seen(seen)
@@ -772,7 +793,7 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
     # une annonce publiée à 23h55 et trouvée au passage de 0h05
     now = datetime.now(PARIS)
     since = min(now.strftime("%Y-%m-%d 00:00:00"),
-                (now - timedelta(minutes=3 * cfg.get("intervalle_minutes", 10)))
+                (now - timedelta(minutes=max(30, 3 * cfg.get("intervalle_minutes", 10))))
                 .strftime("%Y-%m-%d %H:%M:%S"))
     ok = 0
     for product in cfg["produits"]:
@@ -823,7 +844,7 @@ def run_once(client: lbc.Client, tg: Telegram, cfg: dict, seen: dict,
             if a:
                 log.info("  %s %+.0f € : %s", a["label"], a["profit"], title_of(ad))
                 if not tg.send(format_message(ad, a, product, cfg),
-                               ad.images[0] if ad.images else None):
+                               ad.images[0] if ad.images else None, buy_buttons(ad)):
                     # Pas marquée comme vue : l'alerte sera renvoyée au prochain passage
                     continue
             mark_seen(ad, seen)
