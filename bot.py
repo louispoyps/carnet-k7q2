@@ -957,13 +957,13 @@ def run_loop(tg: Telegram, cfg: dict, once: bool = False, status: dict | None = 
         # Le délai part du début du passage : un passage de 30 s ne décale pas le rythme
         wait = max(10, tick * 60 - (time.time() - pass_start))
         log.info("Prochain passage dans %d min %02d s", wait // 60, wait % 60)
-        if os.environ.get("PROXY_URL") and wait > 45:
-            # Après une pause, la 1re requête via le proxy échoue (15 s perdues) : on réveille
-            # la connexion 30 s avant le passage, pour que la vraie recherche parte aussitôt
-            time.sleep(wait - 30)
+        if os.environ.get("PROXY_URL") and wait > 30:
+            # Après ~40 s sans rien faire, la 1re requête via le proxy échoue (15 s perdues) : on
+            # réveille la connexion 20 s avant le passage, pour que la vraie recherche parte aussitôt
+            time.sleep(wait - 20)
             woke = time.time()
             wake(market.client)
-            time.sleep(max(0, 30 - (time.time() - woke)))
+            time.sleep(max(0, 20 - (time.time() - woke)))
         else:
             time.sleep(wait)
 
