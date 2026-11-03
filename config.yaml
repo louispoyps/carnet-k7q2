@@ -71,7 +71,7 @@ achat_auto:
   mode: test
   produits: ["Switch 2"]
   prix_min: 230        # en dessous : trop beau pour être vrai (arnaque, boîte vide, Switch 1)
-  prix_max: 285        # au-dessus : pas d'achat auto (l'alerte arrive quand même)
+  total_max: 310       # tout compris (prix + protection Vinted + port) : 310 € -> prix affiché 287 € max
   avis_min: 0          # 0 : avis du vendeur pas vérifiés (mets 5 pour exiger au moins 5 avis)
   note_min: 0          # 0 : note du vendeur pas vérifiée (mets 4.5 pour exiger 4,5/5)
   max_par_jour: 1      # vide : pas de limite par jour

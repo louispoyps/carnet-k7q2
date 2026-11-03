@@ -647,6 +647,8 @@ def vinted_ad(item: dict) -> SimpleNamespace:
     return SimpleNamespace(
         site="Vinted", id=f"v{item['id']}", seller=(item.get("user") or {}).get("id"),
         subject=item.get("title") or "", body="", price=float(item["price"]["amount"]),
+        # Prix avec la protection acheteur, calculé par Vinted (le port en plus)
+        total_price=float((item.get("total_item_price") or {}).get("amount") or 0) or None,
         url="https://www.vinted.fr" + item["url"] if item["url"].startswith("/") else item["url"],
         images=[photo["url"]] if photo.get("url") else [], category_id="vinted",
         location=SimpleNamespace(city="", zipcode=""),
@@ -726,9 +728,14 @@ def auto_buy_refusal(ad: SimpleNamespace, a: dict, product: dict, cfg: dict,
         return "produit non concerné"
     if ad.price < rules.get("prix_min", 0):
         return f"prix sous {eur(rules['prix_min'])} : trop beau pour être vrai"
-    price_max = rules.get("prix_max") or product["achat"][1]
-    if ad.price > price_max:
-        return f"au-dessus de {eur(price_max)}"
+    rent = rent_for(vinted_product(product, cfg), cfg)
+    port = rent["frais_achat_fixe"] - cfg["vinted"].get("frais_fixe", 0)
+    # Tout compris : prix + protection acheteur (donnée par Vinted, sinon calculée) + port
+    total = (getattr(ad, "total_price", None)
+             or ad.price * (1 + rent["frais_achat_pct"] / 100) + cfg["vinted"].get("frais_fixe", 0)) + port
+    total_max = rules.get("total_max") or product["achat"][1]
+    if total > total_max:
+        return f"{eur(total)} tout compris (max {eur(total_max)})"
     if not getattr(ad, "vinted_catalog", None) or not getattr(ad, "vinted_brand", None):
         return "catégorie ou marque non lue sur la page"
     count = to_int(attr(ad, "rating_count"))
