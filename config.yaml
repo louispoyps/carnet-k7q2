@@ -70,12 +70,12 @@ vinted:
 achat_auto:
   mode: test
   produits: ["Switch 2"]
-  prix_min: 250        # en dessous : trop beau pour être vrai (arnaque, boîte vide, Switch 1)
+  prix_min: 230        # en dessous : trop beau pour être vrai (arnaque, boîte vide, Switch 1)
+  prix_max: 285        # au-dessus : pas d'achat auto (l'alerte arrive quand même)
   avis_min: 5          # le vendeur doit avoir au moins 5 avis...
   note_min: 4.5        # ... et une note d'au moins 4,5/5
-  max_par_jour: 2
+  max_par_jour:        # vide : pas de limite par jour
   etats_refuses: ["etatsatisfaisant"]   # « Satisfaisant » : souvent rayée ou abîmée
-  # Le prix max est ton prix d'achat max du produit (Switch 2 : 340 €).
   # Toute alerte avec un ⚠️ (vendeur, état, prix suspect...) n'est jamais achetée.
 
 mots_arnaque:

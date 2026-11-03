@@ -726,8 +726,9 @@ def auto_buy_refusal(ad: SimpleNamespace, a: dict, product: dict, cfg: dict,
         return "produit non concerné"
     if ad.price < rules.get("prix_min", 0):
         return f"prix sous {eur(rules['prix_min'])} : trop beau pour être vrai"
-    if ad.price > product["achat"][1]:
-        return f"au-dessus de ton achat max ({eur(product['achat'][1])})"
+    price_max = rules.get("prix_max") or product["achat"][1]
+    if ad.price > price_max:
+        return f"au-dessus de {eur(price_max)}"
     if not getattr(ad, "vinted_catalog", None) or not getattr(ad, "vinted_brand", None):
         return "catégorie ou marque non lue sur la page"
     count = to_int(attr(ad, "rating_count"))
@@ -741,8 +742,9 @@ def auto_buy_refusal(ad: SimpleNamespace, a: dict, product: dict, cfg: dict,
     if a["warn"]:
         return f"avertissement : {a['warn'][0]}"
     today = datetime.now().strftime("%Y-%m-%d")
-    if sum(k.startswith(f"achat_auto:{today}:") for k in seen) >= rules.get("max_par_jour", 0):
-        return f"déjà {rules.get('max_par_jour', 0)} achats auto aujourd'hui"
+    limit = rules.get("max_par_jour")  # vide : pas de limite
+    if limit and sum(k.startswith(f"achat_auto:{today}:") for k in seen) >= limit:
+        return f"déjà {limit} achats auto aujourd'hui"
     return None
 
 
