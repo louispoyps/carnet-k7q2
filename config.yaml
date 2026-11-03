@@ -63,6 +63,21 @@ vinted:
 # Pareil s'il y a un numéro de téléphone ou une adresse mail dans l'annonce.
 # Sur Vinted, une annonce dont la description n'a pas pu être lue n'est pas envoyée
 # (réessayée au passage suivant).
+# Achat automatique, sur Vinted seulement.
+#   mode "off"  : coupé
+#   mode "test" : n'achète RIEN, écrit seulement dans l'alerte s'il l'aurait achetée (pour vérifier les règles)
+#   mode "actif": achète vraiment (pas encore branché : il faut la session de ton compte Vinted)
+achat_auto:
+  mode: test
+  produits: ["Switch 2"]
+  prix_min: 250        # en dessous : trop beau pour être vrai (arnaque, boîte vide, Switch 1)
+  avis_min: 5          # le vendeur doit avoir au moins 5 avis...
+  note_min: 4.5        # ... et une note d'au moins 4,5/5
+  max_par_jour: 2
+  etats_refuses: ["etatsatisfaisant"]   # « Satisfaisant » : souvent rayée ou abîmée
+  # Le prix max est ton prix d'achat max du produit (Switch 2 : 340 €).
+  # Toute alerte avec un ⚠️ (vendeur, état, prix suspect...) n'est jamais achetée.
+
 mots_arnaque:
   - "virement"
   - "paypal"

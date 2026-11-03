@@ -616,6 +616,8 @@ def format_message(ad: lbc.Ad, a: dict, product: dict, cfg: dict) -> str:
         lines.append("")
     lines += [f"✅ {e(g)}" for g in a["good"]]
     lines += [f"⚠️ {e(w)}" for w in a["warn"]]
+    if a.get("auto_note"):
+        lines += ["", a["auto_note"]]
     lines += ["", f'<a href="{ad.url}">Voir l\'annonce</a>']
     # Description du vendeur, pour juger soi-même. Raccourcie pour que le message tienne
     # sous la photo (1024 caractères), mais jamais à moins de 300 caractères.
@@ -715,6 +717,72 @@ class Vinted:
                 value=str(field("feedback_reputation") or 0), value_label=None)
 
 
+def auto_buy_refusal(ad: SimpleNamespace, a: dict, product: dict, cfg: dict,
+                     seen: dict) -> str | None:
+    """Pourquoi NE PAS acheter automatiquement cette annonce ; None si toutes les règles passent.
+    Règles volontairement strictes : au moindre doute, c'est toi qui décides."""
+    rules = cfg.get("achat_auto") or {}
+    if getattr(ad, "site", None) != "Vinted" or product["nom"] not in rules.get("produits", []):
+        return "produit non concerné"
+    if ad.price < rules.get("prix_min", 0):
+        return f"prix sous {eur(rules['prix_min'])} : trop beau pour être vrai"
+    if ad.price > product["achat"][1]:
+        return f"au-dessus de ton achat max ({eur(product['achat'][1])})"
+    if not getattr(ad, "vinted_catalog", None) or not getattr(ad, "vinted_brand", None):
+        return "catégorie ou marque non lue sur la page"
+    count = to_int(attr(ad, "rating_count"))
+    if count < rules.get("avis_min", 0):
+        return f"vendeur avec seulement {count} avis"
+    stars = float(attr(ad, "rating_score") or 0) * 5
+    if stars < rules.get("note_min", 0):
+        return f"vendeur noté {stars:.1f}/5"
+    if attr(ad, "condition") in rules.get("etats_refuses", []):
+        return f"état « {attr_label(ad, 'condition')} »"
+    if a["warn"]:
+        return f"avertissement : {a['warn'][0]}"
+    today = datetime.now().strftime("%Y-%m-%d")
+    if sum(k.startswith(f"achat_auto:{today}:") for k in seen) >= rules.get("max_par_jour", 0):
+        return f"déjà {rules.get('max_par_jour', 0)} achats auto aujourd'hui"
+    return None
+
+
+def auto_buy(ad: SimpleNamespace, a: dict, product: dict, cfg: dict, seen: dict) -> None:
+    """Achat automatique (Vinted) selon le mode de config.yaml ; le résultat est ajouté à l'alerte."""
+    rules = cfg.get("achat_auto") or {}
+    mode = rules.get("mode", "off")
+    if mode == "off" or product["nom"] not in rules.get("produits", []):
+        return
+    why = auto_buy_refusal(ad, a, product, cfg, seen)
+    if why:
+        log.info("  achat auto : non (%s)", why)
+        a["auto_note"] = f"🤖 Achat auto{' (test)' if mode == 'test' else ''} : non, {html.escape(why)}"
+        return
+    seen[f"achat_auto:{datetime.now().strftime('%Y-%m-%d')}:{ad.id}"] = datetime.now().isoformat()
+    if mode == "test":
+        log.info("  achat auto (test) : l'aurait acheté")
+        a["auto_note"] = "🤖 <b>Achat auto (test) : il l'aurait ACHETÉE</b> (rien n'a été acheté)"
+        return
+    try:
+        vinted_buy(ad)
+        log.info("  ACHAT AUTO réussi")
+        a["auto_note"] = "🤖✅ <b>ACHETÉE AUTOMATIQUEMENT</b> : valide le paiement sur ton appli bancaire"
+    except Exception as e:
+        log.error("  achat auto raté (%s)", e)
+        a["auto_note"] = f"🤖❌ <b>Achat auto raté</b> ({html.escape(str(e))}) : achète-la à la main, vite !"
+
+
+def vinted_buy(ad: SimpleNamespace) -> None:
+    """Achète l'annonce avec le compte Vinted (session dans bot.env).
+
+    Parcours d'achat du site Vinted (lu dans son code, 03/11/2026) :
+      1. POST /api/v2/purchases/checkout/build {"purchase_items": [{"id": <annonce>, "type": ...}]}
+         -> numéro de commande (purchase_id)
+      2. PUT /api/v2/purchases/<purchase_id>/checkout : livraison et point relais
+      3. paiement : pas dans le code public, à lire sur la page /checkout avec la session du compte
+    """
+    raise NotImplementedError("paiement pas encore branché (session Vinted à ajouter)")
+
+
 def vinted_product(product: dict, cfg: dict) -> dict:
     """Le produit avec les frais d'achat Vinted (protection acheteur + port) à la place de ceux de Leboncoin."""
     v = cfg["vinted"]
@@ -784,6 +852,7 @@ def run_vinted(vinted: Vinted, tg: Telegram, cfg: dict, seen: dict, market: Mark
                 continue
             if a:
                 log.info("  %s %+.0f € : %s", a["label"], a["profit"], title_of(ad))
+                auto_buy(ad, a, product, cfg, seen)
                 if not tg.send(format_message(ad, a, product, cfg),
                                ad.images[0] if ad.images else None, buy_buttons(ad)):
                     continue
