@@ -225,6 +225,14 @@ def rejection(ad: lbc.Ad, product: dict, cfg: dict) -> str | None:
     if getattr(ad, "site", None) == "Vinted" and wanted \
             and not any(has_word(plain(title), plain(w)) for w in wanted):
         return "pas ce modèle"
+    # Catégorie et marque lues sur la page Vinted (seulement pour les annonces rentables) :
+    # un « Réveil manette de ps5 » est rangé dans « Horloges », une fausse manette a une autre marque
+    catalog = getattr(ad, "vinted_catalog", None)
+    if catalog and product.get("vinted_categories") and catalog not in product["vinted_categories"]:
+        return f"catégorie Vinted « {getattr(ad, 'vinted_catalog_name', catalog)} »"
+    brand = getattr(ad, "vinted_brand", None)
+    if brand and product.get("vinted_marques") and not any(m in brand for m in product["vinted_marques"]):
+        return f"marque « {brand} »"
     if re.search(r"pour\s+pi[eè]ces?(?!\w)", title):
         return "vendue pour pièces"
     if product.get("accessoire"):
@@ -694,6 +702,12 @@ class Vinted:
             return json.loads(m.group(1)) if m else None
 
         ad.body = str(field("description") or "")
+        # Fil d'Ariane : /catalog/3570-controllers/brand/272284-playstation?referrer=item-crumbs
+        crumbs = re.findall(r'href="/catalog/(\d+)-([a-z0-9-]+)(?:/brand/\d+-([^?"]*))?'
+                            r'\?referrer=item-crumbs', page.text)
+        if crumbs:
+            ad.vinted_catalog, ad.vinted_catalog_name = int(crumbs[-1][0]), crumbs[-1][1]
+            ad.vinted_brand = next((c[2] for c in crumbs if c[2]), None)
         count = field("feedback_count")
         if count is not None:
             ad.attributes["rating_count"] = SimpleNamespace(value=str(count), value_label=None)

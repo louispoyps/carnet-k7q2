@@ -252,6 +252,8 @@ produits:
   - nom: "PS5"
     mot_cle: "ps5"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     vinted_titre: ["ps5", "playstation 5", "play station 5"]   # sur Vinted, le titre doit contenir un de ces mots
+    vinted_categories: [3025]   # catégorie Vinted « Consoles »
+    vinted_marques: ["playstation", "sony"]
     modeles: ["ps5", "ps5slim"]
     titre_exclut: ["ps5 pro", "portal", "psportal", "playstation portal", "ps vr", "psvr"]
     prix_min: 150     # en dessous, ce n'est jamais une PS5 qui marche
@@ -283,6 +285,8 @@ produits:
   - nom: "Switch 2"
     mot_cle: "switch 2"   # recherche aussi ce mot dans la catégorie « Jeux vidéo »
     vinted_titre: ["switch 2", "switch2"]
+    vinted_categories: [3025]   # catégorie Vinted « Consoles »
+    vinted_marques: ["nintendo"]
     modeles: ["switch2"]
     titre_exclut: ["switch 1", "oled", "lite"]
     prix_min: 200
@@ -319,7 +323,9 @@ produits:
     modeles: ["ps5", "ps5slim"]
     mot_cle: "manette ps5"
     vinted_titre: ["ps5", "playstation 5", "dualsense", "dual sense"]
-    titre_requis: ["manette", "dualsense", "dual sense"]
+    vinted_categories: [3570]   # catégorie Vinted « Manettes » (les réveils sont dans « Horloges »)
+    vinted_marques: ["playstation", "sony"]   # les autres marques sont des copies
+    titre_requis: ["manette", "mannette", "manete", "dualsense", "dual sense"]
     titre_exclut: ["edge", "scuff", "lot", "lots", "manettes", "batterie", "coque", "skin",
                    "station", "chargeur", "support", "câble", "cable", "grip", "grips", "housse",
                    "ps4", "dualshock", "xbox", "switch", "compatible", "façade", "facade",
@@ -331,7 +337,13 @@ produits:
                    # Manettes non officielles : se revendent bien moins cher
                    "pour ps5", "compatible ps5", "atrix", "subsonic", "battletron", "nacon",
                    "bigben", "powera", "power a", "konix", "pdp", "hori", "gamesir", "turtle beach",
-                   "pro"]   # « manette pro ps5 » à 19 € : une copie (la vraie, l'Edge, est déjà écartée)
+                   "pro",   # « manette pro ps5 » à 19 € : une copie (la vraie, l'Edge, est déjà écartée)
+                   # Objets « en forme de manette » et copies
+                   "réveil", "reveil", "réveille", "reveille", "horloge", "lampe", "veilleuse",
+                   "affiche", "poster", "figurine", "porte-clé", "porte-clés", "porte clé",
+                   "porte clés", "porte-cle", "porte cle", "peluche", "sticker", "stickers",
+                   "autocollant", "autocollants", "socle", "contrefaçon", "contrefacon", "copie",
+                   "réplique", "replique", "replica", "fake", "factice", "jouet", "miniature"]
     prix_min: 10      # en dessous : batteries, coques, manettes HS
     prix_marche: [10, 90]
     achat: [20, 30]
