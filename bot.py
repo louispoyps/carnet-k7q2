@@ -791,7 +791,9 @@ def vinted_buy(ad: SimpleNamespace) -> None:
       1. POST /api/v2/purchases/checkout/build {"purchase_items": [{"id": <annonce>, "type": ...}]}
          -> numéro de commande (purchase_id)
       2. PUT /api/v2/purchases/<purchase_id>/checkout : livraison et point relais
-      3. paiement : pas dans le code public, à lire sur la page /checkout avec la session du compte
+      3. OBLIGATOIRE avant de payer : lire le total exact de la commande (prix + protection + port
+         du point relais choisi) ; au-dessus de achat_auto.total_max (310 €), ne PAS payer
+      4. paiement : pas dans le code public, à lire sur la page /checkout avec la session du compte
     """
     raise NotImplementedError("paiement pas encore branché (session Vinted à ajouter)")
 
