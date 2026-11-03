@@ -72,11 +72,12 @@ achat_auto:
   produits: ["Switch 2"]
   prix_min: 230        # en dessous : trop beau pour être vrai (arnaque, boîte vide, Switch 1)
   prix_max: 285        # au-dessus : pas d'achat auto (l'alerte arrive quand même)
-  avis_min: 5          # le vendeur doit avoir au moins 5 avis...
-  note_min: 4.5        # ... et une note d'au moins 4,5/5
-  max_par_jour:        # vide : pas de limite par jour
+  avis_min: 0          # 0 : avis du vendeur pas vérifiés (mets 5 pour exiger au moins 5 avis)
+  note_min: 0          # 0 : note du vendeur pas vérifiée (mets 4.5 pour exiger 4,5/5)
+  max_par_jour: 1      # vide : pas de limite par jour
   etats_refuses: ["etatsatisfaisant"]   # « Satisfaisant » : souvent rayée ou abîmée
-  # Toute alerte avec un ⚠️ (vendeur, état, prix suspect...) n'est jamais achetée.
+  # Toute alerte avec un ⚠️ (état, prix suspect...) n'est jamais achetée, sauf les ⚠️ sur le vendeur
+  # quand avis_min et note_min sont à 0.
 
 mots_arnaque:
   - "virement"

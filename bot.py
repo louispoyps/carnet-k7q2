@@ -739,8 +739,12 @@ def auto_buy_refusal(ad: SimpleNamespace, a: dict, product: dict, cfg: dict,
         return f"vendeur noté {stars:.1f}/5"
     if attr(ad, "condition") in rules.get("etats_refuses", []):
         return f"état « {attr_label(ad, 'condition')} »"
-    if a["warn"]:
-        return f"avertissement : {a['warn'][0]}"
+    warn = a["warn"]
+    if not rules.get("avis_min") and not rules.get("note_min"):
+        # Vendeur pas vérifié (ton choix) : ses avertissements ne bloquent pas l'achat
+        warn = [w for w in warn if not w.startswith(("Vendeur", "Avis du vendeur"))]
+    if warn:
+        return f"avertissement : {warn[0]}"
     today = datetime.now().strftime("%Y-%m-%d")
     limit = rules.get("max_par_jour")  # vide : pas de limite
     if limit and sum(k.startswith(f"achat_auto:{today}:") for k in seen) >= limit:
